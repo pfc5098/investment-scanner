@@ -161,7 +161,7 @@ def generate_html_report(df):
                     .appendTo('#stockTable thead');
             
                 // Custom filtering function for mathematical operators
-                $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {{
+                $.fn.dataTable.ext.search.push(function(settings, data, dataIndex, rowData) {{
                     var isVisible = true;
                     
                     $('#stockTable .filters input').each(function() {{
@@ -169,9 +169,9 @@ def generate_html_report(df):
                         var searchStr = $(this).val().trim();
                         if (searchStr === "") return true;
                         
-                        var cellData = data[index];
-                        // Strip all formatting except for numbers, dots, and minus signs
-                        var numericData = parseFloat(cellData.replace(/[^\\d\\.\\-]/g, ''));
+                        // We use the raw original data (rowData) from pandas to do pure numeric filtering
+                        var cellDataRaw = rowData[index];
+                        var numericData = parseFloat(cellDataRaw);
                         
                         if (searchStr.match(/^[<>]=?\\s*[\\-]?\\d+\\.?\\d*$/)) {{
                             if (isNaN(numericData)) {{ isVisible = false; return false; }}
@@ -186,8 +186,12 @@ def generate_html_report(df):
                         else if (searchStr.match(/^[\\-]?\\d+\\.?\\d*\\s*-\\s*[\\-]?\\d+\\.?\\d*$/)) {{
                             if (isNaN(numericData)) {{ isVisible = false; return false; }}
                             var parts = searchStr.split('-');
-                            var min = parseFloat(parts[0]);
-                            var max = parseFloat(parts[1]);
+                            // Handle negative numbers in range correctly
+                            var minStr = parts[0].trim() === "" && searchStr.startsWith('-') ? "-" + parts[1] : parts[0];
+                            var maxStr = parts[0].trim() === "" && searchStr.startsWith('-') ? parts[2] : parts[1];
+                            
+                            var min = parseFloat(minStr);
+                            var max = parseFloat(maxStr);
                             if (numericData < min || numericData > max) isVisible = false;
                         }}
                         else if (searchStr.startsWith("=")) {{
@@ -196,7 +200,8 @@ def generate_html_report(df):
                             if (numericData !== val) isVisible = false;
                         }}
                         else {{
-                            if (cellData.toLowerCase().indexOf(searchStr.toLowerCase()) === -1) {{
+                            // Text search fallback - use display data for this
+                            if (data[index].toLowerCase().indexOf(searchStr.toLowerCase()) === -1) {{
                                 isVisible = false;
                             }}
                         }}
@@ -216,14 +221,14 @@ def generate_html_report(df):
                             targets: [1, 4, 9, 10, 12, 16, 17, 18], // Financials
                             render: function(data, type, row) {{
                                 if (type === 'display') return formatNumber(parseFloat(data));
-                                return data;
+                                return data; // Raw float for sort/filter
                             }}
                         }},
                         {{
                             targets: [2], // Volume
                             render: function(data, type, row) {{
                                 if (type === 'display') return parseFloat(data).toLocaleString();
-                                return data;
+                                return data; // Raw float for sort/filter
                             }}
                         }},
                         {{
@@ -232,7 +237,7 @@ def generate_html_report(df):
                                 if (type === 'display' && data !== null && data !== "") {{
                                     return (parseFloat(data) * 100).toFixed(2) + "%";
                                 }}
-                                return data;
+                                return data; // Raw float for sort/filter
                             }}
                         }}
                     ],
