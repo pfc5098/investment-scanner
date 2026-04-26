@@ -130,12 +130,61 @@ def generate_html_report(df):
         
         <script>
             $(document).ready(function() {{
-                // Setup - add a text input to each footer cell (we'll prepend it to the header later)
+                // Setup - add a text input to each footer cell
                 $('#stockTable thead tr')
                     .clone(true)
                     .addClass('filters')
                     .appendTo('#stockTable thead');
             
+                // Custom filtering function for mathematical operators
+                $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {{
+                    var isVisible = true;
+                    
+                    $('#stockTable .filters input').each(function() {{
+                        var index = $(this).parent().index();
+                        var searchStr = $(this).val().trim();
+                        if (searchStr === "") return true; // continue to next input
+                        
+                        var cellData = data[index];
+                        // Remove commas and dollar signs for numeric parsing if necessary
+                        var numericData = parseFloat(cellData.replace(/[,\\$]/g, ''));
+                        
+                        // Check for math operators
+                        if (searchStr.match(/^[<>]=?\\s*[\\d\\.]+$/)) {{
+                            if (isNaN(numericData)) {{ isVisible = false; return false; }}
+                            var operator = searchStr.match(/^[<>]=?/)[0];
+                            var val = parseFloat(searchStr.substring(operator.length));
+                            
+                            if (operator === '>' && !(numericData > val)) isVisible = false;
+                            if (operator === '>=' && !(numericData >= val)) isVisible = false;
+                            if (operator === '<' && !(numericData < val)) isVisible = false;
+                            if (operator === '<=' && !(numericData <= val)) isVisible = false;
+                        }} 
+                        // Check for range (e.g., 30-70)
+                        else if (searchStr.match(/^\\d+\\.?\\d*\\s*-\\s*\\d+\\.?\\d*$/)) {{
+                            if (isNaN(numericData)) {{ isVisible = false; return false; }}
+                            var parts = searchStr.split('-');
+                            var min = parseFloat(parts[0]);
+                            var max = parseFloat(parts[1]);
+                            if (numericData < min || numericData > max) isVisible = false;
+                        }}
+                        // Exact numeric match if preceded by =
+                        else if (searchStr.startsWith("=")) {{
+                            if (isNaN(numericData)) {{ isVisible = false; return false; }}
+                            var val = parseFloat(searchStr.substring(1));
+                            if (numericData !== val) isVisible = false;
+                        }}
+                        // Standard text search (case-insensitive)
+                        else {{
+                            if (cellData.toLowerCase().indexOf(searchStr.toLowerCase()) === -1) {{
+                                isVisible = false;
+                            }}
+                        }}
+                    }});
+                    
+                    return isVisible;
+                }});
+
                 var table = $('#stockTable').DataTable({{
                     orderCellsTop: true,
                     fixedHeader: true,
@@ -148,12 +197,16 @@ def generate_html_report(df):
                             .columns()
                             .eq(0)
                             .each(function (colIdx) {{
-                                // Set the header cell to contain the input element
                                 var cell = $('.filters th').eq(
                                     $(api.column(colIdx).header()).index()
                                 );
-                                var title = $(cell).text();
-                                $(cell).html('<input type="text" placeholder="Filter..." />');
+                                
+                                // Determine placeholder based on column index (heuristic for numeric cols)
+                                var title = $(api.column(colIdx).header()).text();
+                                var numericCols = ['price', 'volume', 'rsi_14', 'market_cap', 'pe_ratio', 'eps'];
+                                var placeholder = numericCols.includes(title) ? "e.g. >50, 30-70" : "Filter...";
+                                
+                                $(cell).html('<input type="text" placeholder="' + placeholder + '" />');
              
                                 // On every keypress in this input
                                 $(
@@ -161,31 +214,8 @@ def generate_html_report(df):
                                     $('.filters th').eq($(api.column(colIdx).header()).index())
                                 )
                                     .off('keyup change')
-                                    .on('change', function (e) {{
-                                        // Get the search value
-                                        $(this).attr('title', $(this).val());
-                                        var regexr = '({{search}})'; //$(this).parents('th').find('select').val();
-             
-                                        var cursorPosition = this.selectionStart;
-                                        // Search the column for that value
-                                        api
-                                            .column(colIdx)
-                                            .search(
-                                                this.value != ''
-                                                    ? regexr.replace('{{search}}', '(((' + this.value + ')))')
-                                                    : '',
-                                                this.value != '',
-                                                this.value == ''
-                                            )
-                                            .draw();
-                                    }})
-                                    .on('keyup', function (e) {{
-                                        e.stopPropagation();
-             
-                                        $(this).trigger('change');
-                                        $(this)
-                                            .focus()[0]
-                                            .setSelectionRange(cursorPosition, cursorPosition);
+                                    .on('keyup change', function (e) {{
+                                        table.draw();
                                     }});
                             }});
                     }},
