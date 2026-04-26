@@ -143,6 +143,7 @@ def generate_html_report(df):
         <script type="text/javascript" charset="utf8" src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.js"></script>
         <script type="text/javascript" charset="utf8" src="https://cdn.datatables.net/buttons/2.4.2/js/dataTables.buttons.min.js"></script>
         <script type="text/javascript" charset="utf8" src="https://cdn.datatables.net/buttons/2.4.2/js/buttons.colVis.min.js"></script>
+        <script type="text/javascript" charset="utf8" src="https://cdn.datatables.net/buttons/2.4.2/js/buttons.html5.min.js"></script>
         
         <script>
             function formatNumber(num) {{
@@ -218,7 +219,16 @@ def generate_html_report(df):
 
                 var table = $('#stockTable').DataTable({{
                     dom: 'Bfrtip',
-                    buttons: ['colvis'],
+                    buttons: [
+                        'colvis',
+                        {{
+                            extend: 'csv',
+                            text: 'Download CSV',
+                            exportOptions: {{
+                                orthogonal: 'export'
+                            }}
+                        }}
+                    ],
                     orderCellsTop: true,
                     fixedHeader: true,
                     pageLength: 50,
@@ -227,14 +237,14 @@ def generate_html_report(df):
                             targets: [1, 4, 9, 10, 12, 16, 17, 18], // Financials
                             render: function(data, type, row) {{
                                 if (type === 'display') return formatNumber(parseFloat(data));
-                                return data; // Raw float for sort/filter
+                                return data; // Raw float for sort/filter/export
                             }}
                         }},
                         {{
                             targets: [2], // Volume
                             render: function(data, type, row) {{
                                 if (type === 'display') return parseFloat(data).toLocaleString();
-                                return data; // Raw float for sort/filter
+                                return data; // Raw float for sort/filter/export
                             }}
                         }},
                         {{
@@ -243,7 +253,7 @@ def generate_html_report(df):
                                 if (type === 'display' && data !== null && !isNaN(data)) {{
                                     return Math.round(parseFloat(data));
                                 }}
-                                return data; // Raw float for sort/filter
+                                return data; // Raw float for sort/filter/export
                             }}
                         }},
                         {{
@@ -252,7 +262,7 @@ def generate_html_report(df):
                                 if (type === 'display' && data !== null && data !== "") {{
                                     return (parseFloat(data) * 100).toFixed(2) + "%";
                                 }}
-                                return data; // Raw float for sort/filter
+                                return data; // Raw float for sort/filter/export
                             }}
                         }}
                     ],
