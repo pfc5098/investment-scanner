@@ -85,18 +85,30 @@ class AlphaVantageClient:
     def get_overview(self, symbol):
         params = {"function": "OVERVIEW", "symbol": symbol}
         data = self._make_request(params)
-        return {
-            "MarketCap": data.get("MarketCapitalization", None),
-            "PERatio": data.get("PERatio", None),
-            "EPS": data.get("EPS", None),
-            "Sector": data.get("Sector", None),
-            "Industry": data.get("Industry", None)
-        }
+        return data
+
+    def get_balance_sheet(self, symbol):
+        params = {"function": "BALANCE_SHEET", "symbol": symbol}
+        data = self._make_request(params)
+        reports = data.get("annualReports", [])
+        return reports[0] if reports else {}
+
+    def get_cash_flow(self, symbol):
+        params = {"function": "CASH_FLOW", "symbol": symbol}
+        data = self._make_request(params)
+        reports = data.get("annualReports", [])
+        return reports[0] if reports else {}
+
+    def get_income_statement(self, symbol):
+        params = {"function": "INCOME_STATEMENT", "symbol": symbol}
+        data = self._make_request(params)
+        reports = data.get("annualReports", [])
+        return reports[0] if reports else {}
 
 def generate_html_report(df):
     os.makedirs("public", exist_ok=True)
     
-    # Add basic styling and DataTables integration
+    # Add basic styling and DataTables integration with ColVis
     html_template = """
     <!DOCTYPE html>
     <html lang="en">
@@ -106,15 +118,17 @@ def generate_html_report(df):
         <title>Daily Stock Scan</title>
         <!-- DataTables CSS -->
         <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.css">
+        <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/buttons/2.4.2/css/buttons.dataTables.min.css">
         <style>
             body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; background-color: #f5f5f7; color: #333; }}
             h1 {{ color: #1d1d1f; }}
-            .container {{ max-width: 95%; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+            .container {{ max-width: 98%; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
             .timestamp {{ color: #86868b; margin-bottom: 20px; font-size: 0.9em; }}
-            table {{ width: 100%; font-size: 0.9em; }}
-            th, td {{ padding: 10px 12px; text-align: left; }}
+            table {{ width: 100%; font-size: 0.85em; }}
+            th, td {{ padding: 8px 10px; text-align: left; }}
             thead th {{ background-color: #f8f9fa; font-weight: 600; color: #1d1d1f; }}
             thead input {{ width: 100%; padding: 3px; box-sizing: border-box; margin-top: 5px; font-size: 0.8em; font-weight: normal; }}
+            .dt-buttons {{ margin-bottom: 15px; }}
         </style>
     </head>
     <body>
@@ -127,10 +141,12 @@ def generate_html_report(df):
         <!-- jQuery and DataTables JS -->
         <script type="text/javascript" charset="utf8" src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
         <script type="text/javascript" charset="utf8" src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.js"></script>
+        <script type="text/javascript" charset="utf8" src="https://cdn.datatables.net/buttons/2.4.2/js/dataTables.buttons.min.js"></script>
+        <script type="text/javascript" charset="utf8" src="https://cdn.datatables.net/buttons/2.4.2/js/buttons.colVis.min.js"></script>
         
         <script>
             $(document).ready(function() {{
-                // Setup - add a text input to each footer cell
+                // Setup - add a text input to each header cell
                 $('#stockTable thead tr')
                     .clone(true)
                     .addClass('filters')
@@ -143,14 +159,12 @@ def generate_html_report(df):
                     $('#stockTable .filters input').each(function() {{
                         var index = $(this).parent().index();
                         var searchStr = $(this).val().trim();
-                        if (searchStr === "") return true; // continue to next input
+                        if (searchStr === "") return true;
                         
                         var cellData = data[index];
-                        // Remove commas and dollar signs for numeric parsing if necessary
                         var numericData = parseFloat(cellData.replace(/[,\\$]/g, ''));
                         
-                        // Check for math operators
-                        if (searchStr.match(/^[<>]=?\\s*[\\d\\.]+$/)) {{
+                        if (searchStr.match(/^[<>]=?\\s*[\\-]?\\d+\\.?\\d*$/)) {{
                             if (isNaN(numericData)) {{ isVisible = false; return false; }}
                             var operator = searchStr.match(/^[<>]=?/)[0];
                             var val = parseFloat(searchStr.substring(operator.length));
@@ -160,21 +174,18 @@ def generate_html_report(df):
                             if (operator === '<' && !(numericData < val)) isVisible = false;
                             if (operator === '<=' && !(numericData <= val)) isVisible = false;
                         }} 
-                        // Check for range (e.g., 30-70)
-                        else if (searchStr.match(/^\\d+\\.?\\d*\\s*-\\s*\\d+\\.?\\d*$/)) {{
+                        else if (searchStr.match(/^[\\-]?\\d+\\.?\\d*\\s*-\\s*[\\-]?\\d+\\.?\\d*$/)) {{
                             if (isNaN(numericData)) {{ isVisible = false; return false; }}
                             var parts = searchStr.split('-');
                             var min = parseFloat(parts[0]);
                             var max = parseFloat(parts[1]);
                             if (numericData < min || numericData > max) isVisible = false;
                         }}
-                        // Exact numeric match if preceded by =
                         else if (searchStr.startsWith("=")) {{
                             if (isNaN(numericData)) {{ isVisible = false; return false; }}
                             var val = parseFloat(searchStr.substring(1));
                             if (numericData !== val) isVisible = false;
                         }}
-                        // Standard text search (case-insensitive)
                         else {{
                             if (cellData.toLowerCase().indexOf(searchStr.toLowerCase()) === -1) {{
                                 isVisible = false;
@@ -186,38 +197,26 @@ def generate_html_report(df):
                 }});
 
                 var table = $('#stockTable').DataTable({{
+                    dom: 'Bfrtip',
+                    buttons: ['colvis'],
                     orderCellsTop: true,
                     fixedHeader: true,
                     pageLength: 50,
                     initComplete: function () {{
                         var api = this.api();
-             
-                        // For each column
-                        api
-                            .columns()
-                            .eq(0)
-                            .each(function (colIdx) {{
-                                var cell = $('.filters th').eq(
-                                    $(api.column(colIdx).header()).index()
-                                );
-                                
-                                // Determine placeholder based on column index (heuristic for numeric cols)
-                                var title = $(api.column(colIdx).header()).text();
-                                var numericCols = ['price', 'volume', 'rsi_14', 'market_cap', 'pe_ratio', 'eps'];
-                                var placeholder = numericCols.includes(title) ? "e.g. >50, 30-70" : "Filter...";
-                                
-                                $(cell).html('<input type="text" placeholder="' + placeholder + '" />');
-             
-                                // On every keypress in this input
-                                $(
-                                    'input',
-                                    $('.filters th').eq($(api.column(colIdx).header()).index())
-                                )
-                                    .off('keyup change')
-                                    .on('keyup change', function (e) {{
-                                        table.draw();
-                                    }});
+                        api.columns().eq(0).each(function (colIdx) {{
+                            var cell = $('.filters th').eq($(api.column(colIdx).header()).index());
+                            var title = $(api.column(colIdx).header()).text();
+                            
+                            // Heuristic for numeric columns: match common numeric headers
+                            var isNumeric = /Price|Volume|RSI|Cap|Ratio|EPS|Asset|Liability|Revenue|Margin|CF|CapEx/.test(title);
+                            var placeholder = isNumeric ? ">50, 30-70" : "Filter...";
+                            
+                            $(cell).html('<input type="text" placeholder="' + placeholder + '" />');
+                            $('input', cell).off('keyup change').on('keyup change', function (e) {{
+                                table.draw();
                             }});
+                        }});
                     }},
                 }});
             }});
@@ -226,7 +225,6 @@ def generate_html_report(df):
     </html>
     """
     
-    # Format the table and inject an ID
     html_table = df.to_html(index=False, table_id="stockTable", classes='display', border=0)
     current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     
@@ -235,6 +233,12 @@ def generate_html_report(df):
     with open("public/index.html", "w") as f:
         f.write(final_html)
     logger.info("Successfully generated public/index.html")
+
+def safe_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 def main():
     api_key = os.environ.get("ALPHAVANTAGE_API_KEY")
@@ -248,36 +252,77 @@ def main():
     limit = os.environ.get("SYMBOL_LIMIT")
     
     symbols = av_client.get_active_listings()
+    total_listings = len(symbols)
+    
     if limit:
         symbols = symbols[:int(limit)]
         logger.info(f"Limiting to {limit} symbols for testing.")
 
     results = []
-    total = len(symbols)
+    skipped_small = 0
     
     for i, symbol in enumerate(symbols):
-        logger.info(f"Processing [{i+1}/{total}]: {symbol}")
+        logger.info(f"Processing [{i+1}/{len(symbols)}]: {symbol}")
         try:
+            # 1. Get Overview FIRST to filter by Market Cap
+            overview = av_client.get_overview(symbol)
+            market_cap = safe_float(overview.get("MarketCapitalization"))
+            
+            # Filter: Market Cap > $100 Million
+            if market_cap < 100000000 and not limit:
+                logger.info(f"Skipping {symbol} (Market Cap: ${market_cap:,.0f})")
+                skipped_small += 1
+                continue
+            
+            # 2. If it passes, get the rest
             quote = av_client.get_global_quote(symbol)
             rsi = av_client.get_rsi(symbol)
-            overview = av_client.get_overview(symbol)
+            bs = av_client.get_balance_sheet(symbol)
+            cf = av_client.get_cash_flow(symbol)
+            inc = av_client.get_income_statement(symbol)
+            
+            # Extract and Calculate metrics
+            revenue = safe_float(inc.get("totalRevenue"))
+            gross_profit = safe_float(inc.get("grossProfit"))
+            op_income = safe_float(inc.get("operatingIncome"))
+            net_income = safe_float(inc.get("netIncome"))
+            
+            assets = safe_float(bs.get("totalAssets"))
+            liabilities = safe_float(bs.get("totalLiabilities"))
+            
+            op_cf = safe_float(cf.get("operatingCashflow"))
+            capex = safe_float(cf.get("capitalExpenditures"))
             
             row = {
-                "symbol": symbol,
-                "price": quote.get("Price"),
-                "volume": quote.get("Volume"),
-                "rsi_14": rsi,
-                "market_cap": overview.get("MarketCap"),
-                "pe_ratio": overview.get("PERatio"),
-                "eps": overview.get("EPS"),
-                "sector": overview.get("Sector"),
-                "industry": overview.get("Industry"),
-                "last_updated": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+                "Symbol": symbol,
+                "Price": quote.get("Price"),
+                "Volume": quote.get("Volume"),
+                "RSI (14)": rsi,
+                "Market Cap": market_cap,
+                "P/E Ratio": overview.get("PERatio"),
+                "EPS": overview.get("EPS"),
+                "Sector": overview.get("Sector"),
+                "Industry": overview.get("Industry"),
+                "Asset": assets,
+                "Liability": liabilities,
+                "L/A Ratio": round(liabilities / assets, 4) if assets > 0 else None,
+                "Revenue": revenue,
+                "Gross Margin": round(gross_profit / revenue, 4) if revenue > 0 else None,
+                "Operating Margin": round(op_income / revenue, 4) if revenue > 0 else None,
+                "Net Margin": round(net_income / revenue, 4) if revenue > 0 else None,
+                "Operating CF": op_cf,
+                "CapEx": capex,
+                "Free CF": op_cf - capex,
+                "Last Updated": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
             }
             results.append(row)
         except Exception as e:
             logger.error(f"Error processing {symbol}: {e}")
             continue
+
+    logger.info(f"Scan complete. Total processed: {len(results)}. Skipped <$100M: {skipped_small}")
+    if total_listings > 0:
+        logger.info(f"Post-filter percentage: {(len(results) / len(symbols)) * 100:.2f}% of processed symbols passed.")
 
     if not results:
         logger.warning("No data collected.")
@@ -289,7 +334,6 @@ def main():
     os.makedirs("data", exist_ok=True)
     csv_path = f"data/daily_scan_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
     df.to_csv(csv_path, index=False)
-    logger.info(f"Successfully saved results to {csv_path}")
     
     # Generate HTML report
     generate_html_report(df)
