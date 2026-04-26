@@ -5,8 +5,6 @@ import logging
 import requests
 import pandas as pd
 from datetime import datetime
-import gspread
-from google.oauth2.service_account import Credentials
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 # Configure logging
@@ -33,8 +31,6 @@ class AlphaVantageClient:
         response = requests.get(self.base_url, params=params)
         response.raise_for_status()
         
-        # Alpha Vantage returns 200 OK with Information message if API rate limit exceeded
-        # But in premium this shouldn't happen if we respect the pacing. Still, good to check.
         data = response.json() if 'json' in response.headers.get('Content-Type', '') else response.text
         if isinstance(data, dict) and "Information" in data and "rate limit" in data["Information"].lower():
             logger.warning("Rate limit hit from API response, backing off...")
@@ -53,11 +49,9 @@ class AlphaVantageClient:
         response = requests.get(self.base_url, params=params)
         response.raise_for_status()
         
-        # The response is a CSV
         from io import StringIO
         df = pd.read_csv(StringIO(response.text))
         
-        # Filter for US Equities (usually standard stock)
         us_equities = df[df['assetType'] == 'Stock']
         logger.info(f"Found {len(us_equities)} active US Equities.")
         return us_equities['symbol'].tolist()
@@ -81,9 +75,7 @@ class AlphaVantageClient:
             "series_type": "close"
         }
         data = self._make_request(params)
-        # Handle cases where RSI is not available
         if "Technical Analysis: RSI" in data:
-            # Get the most recent RSI
             dates = list(data["Technical Analysis: RSI"].keys())
             if dates:
                 latest_date = dates[0]
@@ -101,42 +93,50 @@ class AlphaVantageClient:
             "Industry": data.get("Industry", None)
         }
 
-class GoogleSheetsClient:
-    def __init__(self, service_account_json, sheet_url):
-        self.scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        creds_dict = json.loads(service_account_json)
-        self.credentials = Credentials.from_service_account_info(creds_dict, scopes=self.scopes)
-        self.client = gspread.authorize(self.credentials)
-        self.sheet_url = sheet_url
-
-    def update_sheet(self, df, worksheet_name="Data"):
-        logger.info(f"Updating Google Sheet at {self.sheet_url}")
-        spreadsheet = self.client.open_by_url(self.sheet_url)
-        
-        try:
-            worksheet = spreadsheet.worksheet(worksheet_name)
-        except gspread.exceptions.WorksheetNotFound:
-            worksheet = spreadsheet.add_worksheet(title=worksheet_name, rows="1000", cols="20")
-            
-        # Clear existing data
-        worksheet.clear()
-        
-        # Fill NaN values with empty string for JSON serialization
-        df = df.fillna("")
-        
-        # Convert DataFrame to list of lists for gspread
-        data = [df.columns.values.tolist()] + df.values.tolist()
-        
-        worksheet.update('A1', data)
-        logger.info("Successfully updated Google Sheet.")
+def generate_html_report(df):
+    os.makedirs("public", exist_ok=True)
+    
+    # Add some basic styling
+    html_template = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Daily Stock Scan</title>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; background-color: #f5f5f7; color: #333; }}
+            h1 {{ color: #1d1d1f; }}
+            .container {{ max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+            .timestamp {{ color: #86868b; margin-bottom: 20px; font-size: 0.9em; }}
+            table {{ border-collapse: collapse; width: 100%; font-size: 0.9em; }}
+            th, td {{ padding: 12px 15px; text-align: left; border-bottom: 1px solid #ddd; }}
+            th {{ background-color: #f8f9fa; font-weight: 600; color: #1d1d1f; position: sticky; top: 0; }}
+            tr:hover {{ background-color: #f5f5f5; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Daily US Stocks Scan</h1>
+            <div class="timestamp">Last Updated: {timestamp}</div>
+            {table}
+        </div>
+    </body>
+    </html>
+    """
+    
+    # Format the table
+    html_table = df.to_html(index=False, classes='', border=0)
+    current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    
+    final_html = html_template.format(timestamp=current_time, table=html_table)
+    
+    with open("public/index.html", "w") as f:
+        f.write(final_html)
+    logger.info("Successfully generated public/index.html")
 
 def main():
     api_key = os.environ.get("ALPHAVANTAGE_API_KEY")
-    service_account_json = os.environ.get("GCP_SERVICE_ACCOUNT_JSON")
-    sheet_url = os.environ.get("GOOGLE_SHEET_URL")
 
     if not api_key:
         logger.error("Missing ALPHAVANTAGE_API_KEY environment variable.")
@@ -144,13 +144,6 @@ def main():
 
     av_client = AlphaVantageClient(api_key=api_key)
     
-    if service_account_json and sheet_url:
-        gs_client = GoogleSheetsClient(service_account_json=service_account_json, sheet_url=sheet_url)
-    else:
-        gs_client = None
-        logger.info("Google Sheets credentials not provided. Will save results to local CSV.")
-
-    # For testing purposes, allow limiting the number of symbols
     limit = os.environ.get("SYMBOL_LIMIT")
     
     symbols = av_client.get_active_listings()
@@ -183,7 +176,6 @@ def main():
             results.append(row)
         except Exception as e:
             logger.error(f"Error processing {symbol}: {e}")
-            # Continue with next symbol instead of failing entire run
             continue
 
     if not results:
@@ -192,15 +184,14 @@ def main():
 
     df = pd.DataFrame(results)
     
-    if gs_client:
-        # Try to write to a new tab per day or overwrite "Data"
-        # Overwriting "Data" is usually better for connected dashboards
-        gs_client.update_sheet(df, worksheet_name="Data")
-    else:
-        os.makedirs("data", exist_ok=True)
-        csv_path = f"data/daily_scan_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
-        df.to_csv(csv_path, index=False)
-        logger.info(f"Successfully saved results to {csv_path}")
+    # Save raw data
+    os.makedirs("data", exist_ok=True)
+    csv_path = f"data/daily_scan_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+    df.to_csv(csv_path, index=False)
+    logger.info(f"Successfully saved results to {csv_path}")
+    
+    # Generate HTML report
+    generate_html_report(df)
 
 if __name__ == "__main__":
     main()
