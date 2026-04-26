@@ -145,6 +145,14 @@ def generate_html_report(df):
         <script type="text/javascript" charset="utf8" src="https://cdn.datatables.net/buttons/2.4.2/js/buttons.colVis.min.js"></script>
         
         <script>
+            function formatNumber(num) {{
+                if (num === null || isNaN(num)) return "-";
+                if (Math.abs(num) >= 1.0e+12) return (num / 1.0e+12).toFixed(2) + " T";
+                if (Math.abs(num) >= 1.0e+09) return (num / 1.0e+09).toFixed(2) + " B";
+                if (Math.abs(num) >= 1.0e+06) return (num / 1.0e+06).toFixed(2) + " M";
+                return num.toLocaleString(undefined, {{maximumFractionDigits: 2}});
+            }}
+
             $(document).ready(function() {{
                 // Setup - add a text input to each header cell
                 $('#stockTable thead tr')
@@ -162,7 +170,8 @@ def generate_html_report(df):
                         if (searchStr === "") return true;
                         
                         var cellData = data[index];
-                        var numericData = parseFloat(cellData.replace(/[,\\$]/g, ''));
+                        // Strip all formatting except for numbers, dots, and minus signs
+                        var numericData = parseFloat(cellData.replace(/[^\\d\\.\\-]/g, ''));
                         
                         if (searchStr.match(/^[<>]=?\\s*[\\-]?\\d+\\.?\\d*$/)) {{
                             if (isNaN(numericData)) {{ isVisible = false; return false; }}
@@ -202,13 +211,37 @@ def generate_html_report(df):
                     orderCellsTop: true,
                     fixedHeader: true,
                     pageLength: 50,
+                    columnDefs: [
+                        {{
+                            targets: [1, 4, 9, 10, 12, 16, 17, 18], // Financials
+                            render: function(data, type, row) {{
+                                if (type === 'display') return formatNumber(parseFloat(data));
+                                return data;
+                            }}
+                        }},
+                        {{
+                            targets: [2], // Volume
+                            render: function(data, type, row) {{
+                                if (type === 'display') return parseFloat(data).toLocaleString();
+                                return data;
+                            }}
+                        }},
+                        {{
+                            targets: [11, 13, 14, 15], // Margins/Ratios
+                            render: function(data, type, row) {{
+                                if (type === 'display' && data !== null && data !== "") {{
+                                    return (parseFloat(data) * 100).toFixed(2) + "%";
+                                }}
+                                return data;
+                            }}
+                        }}
+                    ],
                     initComplete: function () {{
                         var api = this.api();
                         api.columns().eq(0).each(function (colIdx) {{
                             var cell = $('.filters th').eq($(api.column(colIdx).header()).index());
                             var title = $(api.column(colIdx).header()).text();
                             
-                            // Heuristic for numeric columns: match common numeric headers
                             var isNumeric = /Price|Volume|RSI|Cap|Ratio|EPS|Asset|Liability|Revenue|Margin|CF|CapEx/.test(title);
                             var placeholder = isNumeric ? ">50, 30-70" : "Filter...";
                             
