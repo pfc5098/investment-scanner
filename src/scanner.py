@@ -283,13 +283,18 @@ def main():
     av_client = AlphaVantageClient(api_key=api_key)
     
     limit = os.environ.get("SYMBOL_LIMIT")
+    symbol_list_env = os.environ.get("SYMBOL_LIST")
     
-    symbols = av_client.get_active_listings()
-    total_listings = len(symbols)
-    
-    if limit:
-        symbols = symbols[:int(limit)]
-        logger.info(f"Limiting to {limit} symbols for testing.")
+    if symbol_list_env:
+        symbols = [s.strip() for s in symbol_list_env.split(",") if s.strip()]
+        logger.info(f"Using provided SYMBOL_LIST: {symbols}")
+        total_listings = len(symbols)
+    else:
+        symbols = av_client.get_active_listings()
+        total_listings = len(symbols)
+        if limit:
+            symbols = symbols[:int(limit)]
+            logger.info(f"Limiting to {limit} symbols for testing.")
 
     results = []
     skipped_small = 0
@@ -302,7 +307,8 @@ def main():
             market_cap = safe_float(overview.get("MarketCapitalization"))
             
             # Filter: Market Cap > $250 Million
-            if market_cap < 250000000 and not limit:
+            # Bypass filter if we are explicitly testing a symbol list or limit
+            if not limit and not symbol_list_env and market_cap < 250000000:
                 logger.info(f"Skipping {symbol} (Market Cap: ${market_cap:,.0f})")
                 skipped_small += 1
                 continue

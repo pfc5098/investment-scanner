@@ -38,7 +38,7 @@ jobs:
       - name: Run scanner script
         env:
           ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
-          SYMBOL_LIMIT: 20
+          SYMBOL_LIST: 'AAPL,MSFT,GOOGL,AMZN,META,TSLA,NVDA'
         run: |
           python src/scanner.py
 
