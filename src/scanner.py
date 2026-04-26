@@ -232,6 +232,15 @@ def generate_html_report(df):
                             }}
                         }},
                         {{
+                            targets: [3], // RSI (14)
+                            render: function(data, type, row) {{
+                                if (type === 'display' && data !== null && !isNaN(data)) {{
+                                    return Math.round(parseFloat(data));
+                                }}
+                                return data; // Raw float for sort/filter
+                            }}
+                        }},
+                        {{
                             targets: [11, 13, 14, 15], // Margins/Ratios
                             render: function(data, type, row) {{
                                 if (type === 'display' && data !== null && data !== "") {{
