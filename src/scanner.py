@@ -165,7 +165,7 @@ def generate_html_report(df):
                     var isVisible = true;
                     
                     $('#stockTable .filters input').each(function() {{
-                        var index = $(this).parent().index();
+                        var index = $(this).data('col-index');
                         var searchStr = $(this).val().trim();
                         if (searchStr === "") return true;
                         
@@ -185,13 +185,19 @@ def generate_html_report(df):
                         }} 
                         else if (searchStr.match(/^[\\-]?\\d+\\.?\\d*\\s*-\\s*[\\-]?\\d+\\.?\\d*$/)) {{
                             if (isNaN(numericData)) {{ isVisible = false; return false; }}
-                            var parts = searchStr.split('-');
-                            // Handle negative numbers in range correctly
-                            var minStr = parts[0].trim() === "" && searchStr.startsWith('-') ? "-" + parts[1] : parts[0];
-                            var maxStr = parts[0].trim() === "" && searchStr.startsWith('-') ? parts[2] : parts[1];
                             
-                            var min = parseFloat(minStr);
-                            var max = parseFloat(maxStr);
+                            // Handling negative numbers in ranges (e.g., -10--5)
+                            var min, max;
+                            if (searchStr.startsWith('-')) {{
+                                var midHyphen = searchStr.indexOf('-', 1);
+                                min = parseFloat(searchStr.substring(0, midHyphen));
+                                max = parseFloat(searchStr.substring(midHyphen + 1));
+                            }} else {{
+                                var parts = searchStr.split('-');
+                                min = parseFloat(parts[0]);
+                                max = parseFloat(parts[1]);
+                            }}
+                            
                             if (numericData < min || numericData > max) isVisible = false;
                         }}
                         else if (searchStr.startsWith("=")) {{
@@ -253,11 +259,20 @@ def generate_html_report(df):
                     initComplete: function () {{
                         var api = this.api();
                         api.columns().eq(0).each(function (colIdx) {{
-                            var cell = $('.filters th').eq($(api.column(colIdx).header()).index());
-                            var title = $(api.column(colIdx).header()).text();
+                            var headerCell = $(api.column(colIdx).header());
+                            var filterCell = $('.filters th').eq(headerCell.index());
+                            var title = headerCell.text();
                             
                             var isNumeric = /Price|Volume|RSI|Cap|Ratio|EPS|Asset|Liability|Revenue|Margin|CF|CapEx/.test(title);
                             var placeholder = isNumeric ? ">50, 30-70" : "Filter...";
+                            
+                            $(filterCell).html('<input type="text" data-col-index="' + colIdx + '" placeholder="' + placeholder + '" />');
+                            $('input', filterCell).off('keyup change').on('keyup change', function (e) {{
+                                table.draw();
+                            }});
+                        }});
+                    }},
+                }});
                             
                             $(cell).html('<input type="text" placeholder="' + placeholder + '" />');
                             $('input', cell).off('keyup change').on('keyup change', function (e) {{
