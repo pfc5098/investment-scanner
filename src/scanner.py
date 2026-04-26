@@ -301,8 +301,8 @@ def main():
             overview = av_client.get_overview(symbol)
             market_cap = safe_float(overview.get("MarketCapitalization"))
             
-            # Filter: Market Cap > $100 Million
-            if market_cap < 100000000 and not limit:
+            # Filter: Market Cap > $250 Million
+            if market_cap < 250000000 and not limit:
                 logger.info(f"Skipping {symbol} (Market Cap: ${market_cap:,.0f})")
                 skipped_small += 1
                 continue
