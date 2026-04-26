@@ -96,7 +96,7 @@ class AlphaVantageClient:
 def generate_html_report(df):
     os.makedirs("public", exist_ok=True)
     
-    # Add some basic styling
+    # Add basic styling and DataTables integration
     html_template = """
     <!DOCTYPE html>
     <html lang="en">
@@ -104,15 +104,17 @@ def generate_html_report(df):
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Daily Stock Scan</title>
+        <!-- DataTables CSS -->
+        <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.css">
         <style>
             body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; background-color: #f5f5f7; color: #333; }}
             h1 {{ color: #1d1d1f; }}
-            .container {{ max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+            .container {{ max-width: 95%; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
             .timestamp {{ color: #86868b; margin-bottom: 20px; font-size: 0.9em; }}
-            table {{ border-collapse: collapse; width: 100%; font-size: 0.9em; }}
-            th, td {{ padding: 12px 15px; text-align: left; border-bottom: 1px solid #ddd; }}
-            th {{ background-color: #f8f9fa; font-weight: 600; color: #1d1d1f; position: sticky; top: 0; }}
-            tr:hover {{ background-color: #f5f5f5; }}
+            table {{ width: 100%; font-size: 0.9em; }}
+            th, td {{ padding: 10px 12px; text-align: left; }}
+            thead th {{ background-color: #f8f9fa; font-weight: 600; color: #1d1d1f; }}
+            thead input {{ width: 100%; padding: 3px; box-sizing: border-box; margin-top: 5px; font-size: 0.8em; font-weight: normal; }}
         </style>
     </head>
     <body>
@@ -121,12 +123,81 @@ def generate_html_report(df):
             <div class="timestamp">Last Updated: {timestamp}</div>
             {table}
         </div>
+        
+        <!-- jQuery and DataTables JS -->
+        <script type="text/javascript" charset="utf8" src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+        <script type="text/javascript" charset="utf8" src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.js"></script>
+        
+        <script>
+            $(document).ready(function() {{
+                // Setup - add a text input to each footer cell (we'll prepend it to the header later)
+                $('#stockTable thead tr')
+                    .clone(true)
+                    .addClass('filters')
+                    .appendTo('#stockTable thead');
+            
+                var table = $('#stockTable').DataTable({{
+                    orderCellsTop: true,
+                    fixedHeader: true,
+                    pageLength: 50,
+                    initComplete: function () {{
+                        var api = this.api();
+             
+                        // For each column
+                        api
+                            .columns()
+                            .eq(0)
+                            .each(function (colIdx) {{
+                                // Set the header cell to contain the input element
+                                var cell = $('.filters th').eq(
+                                    $(api.column(colIdx).header()).index()
+                                );
+                                var title = $(cell).text();
+                                $(cell).html('<input type="text" placeholder="Filter..." />');
+             
+                                // On every keypress in this input
+                                $(
+                                    'input',
+                                    $('.filters th').eq($(api.column(colIdx).header()).index())
+                                )
+                                    .off('keyup change')
+                                    .on('change', function (e) {{
+                                        // Get the search value
+                                        $(this).attr('title', $(this).val());
+                                        var regexr = '({{search}})'; //$(this).parents('th').find('select').val();
+             
+                                        var cursorPosition = this.selectionStart;
+                                        // Search the column for that value
+                                        api
+                                            .column(colIdx)
+                                            .search(
+                                                this.value != ''
+                                                    ? regexr.replace('{{search}}', '(((' + this.value + ')))')
+                                                    : '',
+                                                this.value != '',
+                                                this.value == ''
+                                            )
+                                            .draw();
+                                    }})
+                                    .on('keyup', function (e) {{
+                                        e.stopPropagation();
+             
+                                        $(this).trigger('change');
+                                        $(this)
+                                            .focus()[0]
+                                            .setSelectionRange(cursorPosition, cursorPosition);
+                                    }});
+                            }});
+                    }},
+                }});
+            }});
+        </script>
     </body>
     </html>
     """
     
-    # Format the table
-    html_table = df.to_html(index=False, classes='', border=0)
+    # Format the table and inject an ID
+    html_table = df.to_html(index=False, table_id="stockTable", classes='display', border=0)
     current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     
     final_html = html_template.format(timestamp=current_time, table=html_table)
