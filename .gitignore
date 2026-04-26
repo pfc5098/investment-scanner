@@ -1,0 +1,13 @@
+# Secrets
+.env
+
+# Local data
+data/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Local workspace settings
+.gemini/settings.json
+.gemini/tmp/
