@@ -38,23 +38,25 @@ class AlphaVantageClient:
         
         return data
 
-    def get_active_listings(self):
-        logger.info("Fetching active US equity listings...")
-        self._wait()
-        params = {
-            "function": "LISTING_STATUS",
-            "state": "active",
-            "apikey": self.api_key
-        }
-        response = requests.get(self.base_url, params=params)
-        response.raise_for_status()
+    def get_sp500_symbols(self):
+        logger.info("Fetching S&P 500 symbols from Wikipedia...")
+        url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
         
-        from io import StringIO
-        df = pd.read_csv(StringIO(response.text))
-        
-        us_equities = df[df['assetType'] == 'Stock']
-        logger.info(f"Found {len(us_equities)} active US Equities.")
-        return us_equities['symbol'].tolist()
+        try:
+            # Wikipedia blocks default python-requests user agents. Must provide a standard user-agent.
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = requests.get(url, headers=headers, verify=False)
+            response.raise_for_status()
+            
+            tables = pd.read_html(response.text)
+            df = tables[0]
+            # Replace dots with hyphens for ticker compatibility (e.g. BRK.B -> BRK-B)
+            symbols = df['Symbol'].str.replace('.', '-').tolist()
+            logger.info(f"Found {len(symbols)} S&P 500 Equities.")
+            return symbols
+        except Exception as e:
+            logger.error(f"Failed to fetch S&P 500 from Wikipedia: {e}")
+            raise
 
     def get_global_quote(self, symbol):
         params = {"function": "GLOBAL_QUOTE", "symbol": symbol}
@@ -329,30 +331,18 @@ def main():
         logger.info(f"Using provided SYMBOL_LIST: {symbols}")
         total_listings = len(symbols)
     else:
-        symbols = av_client.get_active_listings()
+        symbols = av_client.get_sp500_symbols()
         total_listings = len(symbols)
         if limit:
             symbols = symbols[:int(limit)]
             logger.info(f"Limiting to {limit} symbols for testing.")
 
     results = []
-    skipped_small = 0
     
     for i, symbol in enumerate(symbols):
         logger.info(f"Processing [{i+1}/{len(symbols)}]: {symbol}")
         try:
-            # 1. Get Overview FIRST to filter by Market Cap
             overview = av_client.get_overview(symbol)
-            market_cap = safe_float(overview.get("MarketCapitalization"))
-            
-            # Filter: Market Cap > $250 Million
-            # Bypass filter if we are explicitly testing a symbol list or limit
-            if not limit and not symbol_list_env and market_cap < 250000000:
-                logger.info(f"Skipping {symbol} (Market Cap: ${market_cap:,.0f})")
-                skipped_small += 1
-                continue
-            
-            # 2. If it passes, get the rest
             quote = av_client.get_global_quote(symbol)
             rsi = av_client.get_rsi(symbol)
             bs = av_client.get_balance_sheet(symbol)
@@ -360,6 +350,7 @@ def main():
             inc = av_client.get_income_statement(symbol)
             
             # Extract and Calculate metrics
+            market_cap = safe_float(overview.get("MarketCapitalization"))
             revenue = safe_float(inc.get("totalRevenue"))
             gross_profit = safe_float(inc.get("grossProfit"))
             op_income = safe_float(inc.get("operatingIncome"))
@@ -398,9 +389,7 @@ def main():
             logger.error(f"Error processing {symbol}: {e}")
             continue
 
-    logger.info(f"Scan complete. Total processed: {len(results)}. Skipped <$100M: {skipped_small}")
-    if total_listings > 0:
-        logger.info(f"Post-filter percentage: {(len(results) / len(symbols)) * 100:.2f}% of processed symbols passed.")
+    logger.info(f"Scan complete. Total processed: {len(results)}.")
 
     if not results:
         logger.warning("No data collected.")
