@@ -93,20 +93,17 @@ class AlphaVantageClient:
     def get_balance_sheet(self, symbol):
         params = {"function": "BALANCE_SHEET", "symbol": symbol}
         data = self._make_request(params)
-        reports = data.get("annualReports", [])
-        return reports[0] if reports else {}
+        return data
 
     def get_cash_flow(self, symbol):
         params = {"function": "CASH_FLOW", "symbol": symbol}
         data = self._make_request(params)
-        reports = data.get("annualReports", [])
-        return reports[0] if reports else {}
+        return data
 
     def get_income_statement(self, symbol):
         params = {"function": "INCOME_STATEMENT", "symbol": symbol}
         data = self._make_request(params)
-        reports = data.get("annualReports", [])
-        return reports[0] if reports else {}
+        return data
 
 def generate_html_report(df):
     os.makedirs("public", exist_ok=True)
@@ -237,21 +234,21 @@ def generate_html_report(df):
                     pageLength: 50,
                     columnDefs: [
                         {{
-                            targets: [1, 4, 9, 10, 12, 16, 17, 18], // Financials
+                            targets: [5, 9, 17, 18, 22, 23, 24], // Financials
                             render: function(data, type, row) {{
                                 if (type === 'display') return formatNumber(parseFloat(data));
                                 return data; // Raw float for sort/filter/export
                             }}
                         }},
                         {{
-                            targets: [2], // Volume
+                            targets: [4], // Volume
                             render: function(data, type, row) {{
                                 if (type === 'display') return parseFloat(data).toLocaleString();
                                 return data; // Raw float for sort/filter/export
                             }}
                         }},
                         {{
-                            targets: [3], // RSI (14)
+                            targets: [6], // RSI (14)
                             render: function(data, type, row) {{
                                 if (type === 'display' && data !== null && !isNaN(data)) {{
                                     return Math.round(parseFloat(data));
@@ -260,7 +257,7 @@ def generate_html_report(df):
                             }}
                         }},
                         {{
-                            targets: [11, 13, 14, 15], // Margins/Ratios
+                            targets: [10, 11, 12, 13, 14, 15, 16, 20, 21, 25, 26, 27, 28], // Margins/Ratios/Growth
                             render: function(data, type, row) {{
                                 if (type === 'display' && data !== null && data !== "") {{
                                     return (parseFloat(data) * 100).toFixed(2) + "%";
@@ -276,7 +273,7 @@ def generate_html_report(df):
                             var filterCell = $('.filters th').eq(headerCell.index());
                             var title = headerCell.text();
                             
-                            var isNumeric = /Price|Volume|RSI|Cap|Ratio|EPS|Asset|Liability|Revenue|Margin|CF|CapEx/.test(title);
+                            var isNumeric = /Price|Volume|RSI|Cap|Ratio|EPS|Asset|Liability|Revenue|Margin|CF|CapEx|YoY|QoQ/.test(title);
                             var placeholder = isNumeric ? ">50, 30-70" : "Filter...";
                             
                             $(filterCell).html('<input type="text" data-col-index="' + colIdx + '" placeholder="' + placeholder + '" />');
@@ -306,6 +303,41 @@ def safe_float(value):
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+def safe_float_opt(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+def calc_growth(quarterly_reports, current_idx, past_idx, key1, key2=None):
+    if not quarterly_reports or len(quarterly_reports) <= max(current_idx, past_idx):
+        return None
+    
+    current_q = quarterly_reports[current_idx]
+    past_q = quarterly_reports[past_idx]
+    
+    val1_c = safe_float_opt(current_q.get(key1))
+    val1_p = safe_float_opt(past_q.get(key1))
+    
+    if val1_c is None or val1_p is None:
+        return None
+        
+    if key2:
+        val2_c = safe_float_opt(current_q.get(key2))
+        val2_p = safe_float_opt(past_q.get(key2))
+        if val2_c is None or val2_p is None:
+            return None
+        val_current = val1_c - val2_c
+        val_past = val1_p - val2_p
+    else:
+        val_current = val1_c
+        val_past = val1_p
+        
+    if val_past == 0:
+        return None
+    
+    return round((val_current - val_past) / abs(val_past), 4)
 
 def main():
     api_key = os.environ.get("ALPHAVANTAGE_API_KEY")
@@ -342,39 +374,81 @@ def main():
             cf = av_client.get_cash_flow(symbol)
             inc = av_client.get_income_statement(symbol)
             
+            if overview.get("Industry", "").upper() == "SHELL COMPANIES":
+                logger.info(f"Skipping {symbol} (Shell Company)")
+                continue
+
             # Extract and Calculate metrics
             market_cap = safe_float(overview.get("MarketCapitalization"))
-            revenue = safe_float(inc.get("totalRevenue"))
-            gross_profit = safe_float(inc.get("grossProfit"))
-            op_income = safe_float(inc.get("operatingIncome"))
-            net_income = safe_float(inc.get("netIncome"))
             
-            assets = safe_float(bs.get("totalAssets"))
-            liabilities = safe_float(bs.get("totalLiabilities"))
+            inc_q = inc.get("quarterlyReports", [])
+            bs_q = bs.get("quarterlyReports", [])
+            cf_q = cf.get("quarterlyReports", [])
+
+            inc_a = inc.get("annualReports", [{}])[0] if inc.get("annualReports") else {}
+            bs_a = bs.get("annualReports", [{}])[0] if bs.get("annualReports") else {}
+            cf_a = cf.get("annualReports", [{}])[0] if cf.get("annualReports") else {}
+
+            revenue = safe_float(inc_a.get("totalRevenue"))
+            gross_profit = safe_float(inc_a.get("grossProfit"))
+            op_income = safe_float(inc_a.get("operatingIncome"))
+            net_income = safe_float(inc_a.get("netIncome"))
             
-            op_cf = safe_float(cf.get("operatingCashflow"))
-            capex = safe_float(cf.get("capitalExpenditures"))
+            assets = safe_float(bs_a.get("totalAssets"))
+            liabilities = safe_float(bs_a.get("totalLiabilities"))
+            
+            op_cf = safe_float(cf_a.get("operatingCashflow"))
+            capex = safe_float(cf_a.get("capitalExpenditures"))
             
             row = {
+                # 1. General
                 "Symbol": symbol,
-                "Price": quote.get("Price"),
-                "Volume": quote.get("Volume"),
-                "RSI (14)": rsi,
-                "Market Cap": market_cap,
-                "P/E Ratio": overview.get("PERatio"),
-                "EPS": overview.get("EPS"),
                 "Sector": overview.get("Sector"),
                 "Industry": overview.get("Industry"),
-                "Asset": assets,
-                "Liability": liabilities,
-                "L/A Ratio": round(liabilities / assets, 4) if assets > 0 else None,
+                
+                # 2. Market
+                "Price": quote.get("Price"),
+                "Volume": quote.get("Volume"),
+                "Market Cap": market_cap,
+                "RSI (14)": rsi,
+                
+                # 3. Valuation
+                "P/E Ratio": overview.get("PERatio"),
+                "EPS": overview.get("EPS"),
+                
+                # 4. Profitability
                 "Revenue": revenue,
                 "Gross Margin": round(gross_profit / revenue, 4) if revenue > 0 else None,
                 "Operating Margin": round(op_income / revenue, 4) if revenue > 0 else None,
                 "Net Margin": round(net_income / revenue, 4) if revenue > 0 else None,
+                
+                # 5. Income Growth
+                "Rev QoQ": calc_growth(inc_q, 0, 1, "totalRevenue"),
+                "Rev YoY": calc_growth(inc_q, 0, 4, "totalRevenue"),
+                "Net Inc QoQ": calc_growth(inc_q, 0, 1, "netIncome"),
+                "Net Inc YoY": calc_growth(inc_q, 0, 4, "netIncome"),
+                
+                # 6. Balance Sheet
+                "Asset": assets,
+                "Liability": liabilities,
+                "L/A Ratio": round(liabilities / assets, 4) if assets > 0 else None,
+                
+                # 7. BS Growth
+                "Asset QoQ": calc_growth(bs_q, 0, 1, "totalAssets"),
+                "Asset YoY": calc_growth(bs_q, 0, 4, "totalAssets"),
+                
+                # 8. Cash Flow
                 "Operating CF": op_cf,
                 "CapEx": capex,
                 "Free CF": op_cf - capex,
+                
+                # 9. CF Growth
+                "Op CF QoQ": calc_growth(cf_q, 0, 1, "operatingCashflow"),
+                "Op CF YoY": calc_growth(cf_q, 0, 4, "operatingCashflow"),
+                "Free CF QoQ": calc_growth(cf_q, 0, 1, "operatingCashflow", "capitalExpenditures"),
+                "Free CF YoY": calc_growth(cf_q, 0, 4, "operatingCashflow", "capitalExpenditures"),
+                
+                # 10. Meta
                 "Last Updated": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
             }
             results.append(row)
