@@ -48,7 +48,8 @@ class AlphaVantageClient:
             response = requests.get(url, headers=headers, verify=False)
             response.raise_for_status()
             
-            tables = pd.read_html(response.text)
+            from io import StringIO
+            tables = pd.read_html(StringIO(response.text))
             df = tables[0]
             # Replace dots with hyphens for ticker compatibility (e.g. BRK.B -> BRK-B)
             symbols = df['Symbol'].str.replace('.', '-').tolist()
