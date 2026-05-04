@@ -286,14 +286,6 @@ def generate_html_report(df):
                         }});
                     }},
                 }});
-                            
-                            $(cell).html('<input type="text" placeholder="' + placeholder + '" />');
-                            $('input', cell).off('keyup change').on('keyup change', function (e) {{
-                                table.draw();
-                            }});
-                        }});
-                    }},
-                }});
             }});
         </script>
     </body>
