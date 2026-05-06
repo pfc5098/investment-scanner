@@ -231,21 +231,21 @@ def generate_html_report(df):
                     pageLength: 50,
                     columnDefs: [
                         {{
-                            targets: [5, 9, 17, 18, 22, 23, 24], // Financials
+                            targets: [6, 10, 18, 19, 23, 24, 25], // Financials
                             render: function(data, type, row) {{
                                 if (type === 'display') return formatNumber(parseFloat(data));
                                 return data; // Raw float for sort/filter/export
                             }}
                         }},
                         {{
-                            targets: [4], // Volume
+                            targets: [5], // Volume
                             render: function(data, type, row) {{
                                 if (type === 'display') return parseFloat(data).toLocaleString();
                                 return data; // Raw float for sort/filter/export
                             }}
                         }},
                         {{
-                            targets: [6], // RSI (14)
+                            targets: [7], // RSI (14)
                             render: function(data, type, row) {{
                                 if (type === 'display' && data !== null && !isNaN(data)) {{
                                     return Math.round(parseFloat(data));
@@ -254,7 +254,7 @@ def generate_html_report(df):
                             }}
                         }},
                         {{
-                            targets: [10, 11, 12, 13, 14, 15, 16, 20, 21, 25, 26, 27, 28], // Margins/Ratios/Growth
+                            targets: [11, 12, 13, 14, 15, 16, 17, 21, 22, 26, 27, 28, 29], // Margins/Ratios/Growth
                             render: function(data, type, row) {{
                                 if (type === 'display' && data !== null && data !== "") {{
                                     return (parseFloat(data) * 100).toFixed(2) + "%";
@@ -412,6 +412,7 @@ def main():
             row = {
                 # 1. General
                 "Symbol": symbol,
+                "Name": overview.get("Name"),
                 "Sector": overview.get("Sector"),
                 "Industry": overview.get("Industry"),
                 
