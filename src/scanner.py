@@ -133,7 +133,7 @@ def generate_html_report(df):
             <h1>Daily US Stocks Scan</h1>
             <div style="margin-bottom: 15px;">
                 <strong>General Scan</strong> | 
-                <a href="opportunity_report.html" style="text-decoration: none; color: #0066cc;">Opportunity Scanner</a>
+                <a href="opportunity_report.html" style="{{text-decoration: none; color: #0066cc;}}">Opportunity Scanner</a>
             </div>
             <div class="timestamp">Last Updated: {timestamp}</div>
             {table}

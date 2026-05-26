@@ -27,20 +27,31 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-          cache: 'pip'
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          uv venv
+          uv pip install -r requirements.txt
 
       - name: Run scanner script
         env:
           ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
           SYMBOL_LIST: 'AAPL,MSFT,GOOGL,AMZN,META,TSLA,NVDA'
         run: |
-          python src/scanner.py
+          uv run python src/scanner.py
+
+      - name: Run opportunity scanner script
+        env:
+          ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+          SYMBOL_LIST: 'AAPL,MSFT,GOOGL,AMZN,META,TSLA,NVDA'
+        run: |
+          uv run python src/opportunity_scanner.py
 
       - name: Upload pages artifact
         uses: actions/upload-pages-artifact@v3

@@ -134,7 +134,7 @@ def generate_html_report(df):
         <div class="container">
             <h1>Opportunity Scanner Report</h1>
             <div style="margin-bottom: 15px;">
-                <a href="index.html" style="text-decoration: none; color: #0066cc;">General Scan</a> | 
+                <a href="index.html" style="{{text-decoration: none; color: #0066cc;}}">General Scan</a> | 
                 <strong>Opportunity Scanner</strong>
             </div>
             <div class="timestamp">Last Updated: {timestamp}</div>
