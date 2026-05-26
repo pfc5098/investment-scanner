@@ -4,7 +4,7 @@ import json
 import logging
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 # Configure logging
@@ -105,14 +105,13 @@ class AlphaVantageClient:
 def generate_html_report(df):
     os.makedirs("public", exist_ok=True)
     
-    # Add basic styling and DataTables integration with ColVis
     html_template = """
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Daily Stock Scan</title>
+        <title>Opportunity Scanner Report</title>
         <!-- DataTables CSS -->
         <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.css">
         <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/buttons/2.4.2/css/buttons.dataTables.min.css">
@@ -126,14 +125,17 @@ def generate_html_report(df):
             thead th {{ background-color: #f8f9fa; font-weight: 600; color: #1d1d1f; }}
             thead input {{ width: 100%; padding: 3px; box-sizing: border-box; margin-top: 5px; font-size: 0.8em; font-weight: normal; }}
             .dt-buttons {{ margin-bottom: 15px; }}
+            .score-high {{ color: green; font-weight: bold; }}
+            .score-med {{ color: orange; font-weight: bold; }}
+            .score-low {{ color: red; }}
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>Daily US Stocks Scan</h1>
+            <h1>Opportunity Scanner Report</h1>
             <div style="margin-bottom: 15px;">
-                <strong>General Scan</strong> | 
-                <a href="opportunity_report.html" style="text-decoration: none; color: #0066cc;">Opportunity Scanner</a>
+                <a href="index.html" style="text-decoration: none; color: #0066cc;">General Scan</a> | 
+                <strong>Opportunity Scanner</strong>
             </div>
             <div class="timestamp">Last Updated: {timestamp}</div>
             {table}
@@ -171,7 +173,6 @@ def generate_html_report(df):
                         var searchStr = $(this).val().trim();
                         if (searchStr === "") return true;
                         
-                        // We use the raw original data (rowData) from pandas to do pure numeric filtering
                         var cellDataRaw = rowData[index];
                         var numericData = parseFloat(cellDataRaw);
                         
@@ -188,7 +189,6 @@ def generate_html_report(df):
                         else if (searchStr.match(/^[\\-]?\\d+\\.?\\d*\\s*-\\s*[\\-]?\\d+\\.?\\d*$/)) {{
                             if (isNaN(numericData)) {{ isVisible = false; return false; }}
                             
-                            // Handling negative numbers in ranges (e.g., -10--5)
                             var min, max;
                             if (searchStr.startsWith('-')) {{
                                 var midHyphen = searchStr.indexOf('-', 1);
@@ -208,7 +208,6 @@ def generate_html_report(df):
                             if (numericData !== val) isVisible = false;
                         }}
                         else {{
-                            // Text search fallback - use display data for this
                             if (data[index].toLowerCase().indexOf(searchStr.toLowerCase()) === -1) {{
                                 isVisible = false;
                             }}
@@ -233,37 +232,34 @@ def generate_html_report(df):
                     orderCellsTop: true,
                     fixedHeader: true,
                     pageLength: 50,
+                    order: [[4, "desc"]], // Sort by Total Score descending by default (assuming index 4)
                     columnDefs: [
                         {{
-                            targets: [6, 10, 18, 19, 23, 24, 25], // Financials
+                            targets: [4], // Total Score
+                            render: function(data, type, row) {{
+                                if (type === 'display') {{
+                                    var val = parseFloat(data);
+                                    if (val >= 15) return '<span class="score-high">' + val + '</span>';
+                                    if (val >= 10) return '<span class="score-med">' + val + '</span>';
+                                    return '<span class="score-low">' + val + '</span>';
+                                }}
+                                return data;
+                            }}
+                        }},
+                        {{
+                            targets: [11, 12, 13, 14, 15, 23, 24, 28, 29, 30], // Financials / Caps (adjust indices based on final columns)
                             render: function(data, type, row) {{
                                 if (type === 'display') return formatNumber(parseFloat(data));
-                                return data; // Raw float for sort/filter/export
+                                return data;
                             }}
                         }},
                         {{
-                            targets: [5], // Volume
-                            render: function(data, type, row) {{
-                                if (type === 'display') return parseFloat(data).toLocaleString();
-                                return data; // Raw float for sort/filter/export
-                            }}
-                        }},
-                        {{
-                            targets: [7], // RSI (14)
-                            render: function(data, type, row) {{
-                                if (type === 'display' && data !== null && !isNaN(data)) {{
-                                    return Math.round(parseFloat(data));
-                                }}
-                                return data; // Raw float for sort/filter/export
-                            }}
-                        }},
-                        {{
-                            targets: [11, 12, 13, 14, 15, 16, 17, 21, 22, 26, 27, 28, 29], // Margins/Ratios/Growth
+                            targets: [16, 17, 18, 19, 20, 21, 22, 26, 27, 31, 32, 33, 34], // Margins/Ratios/Growth (adjust indices)
                             render: function(data, type, row) {{
                                 if (type === 'display' && data !== null && data !== "") {{
                                     return (parseFloat(data) * 100).toFixed(2) + "%";
                                 }}
-                                return data; // Raw float for sort/filter/export
+                                return data; 
                             }}
                         }}
                     ],
@@ -274,7 +270,7 @@ def generate_html_report(df):
                             var filterCell = $('.filters th').eq(headerCell.index());
                             var title = headerCell.text();
                             
-                            var isNumeric = /Price|Volume|RSI|Cap|Ratio|EPS|Asset|Liability|Revenue|Margin|CF|CapEx|YoY|QoQ/.test(title);
+                            var isNumeric = /Score|Price|Volume|RSI|Cap|Ratio|EPS|Asset|Liability|Revenue|Margin|CF|CapEx|YoY|QoQ|High|Average/.test(title);
                             var placeholder = isNumeric ? ">50, 30-70" : "Filter...";
                             
                             $(filterCell).html('<input type="text" data-col-index="' + colIdx + '" placeholder="' + placeholder + '" />');
@@ -291,13 +287,13 @@ def generate_html_report(df):
     """
     
     html_table = df.to_html(index=False, table_id="stockTable", classes='display', border=0)
-    current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     
     final_html = html_template.format(timestamp=current_time, table=html_table)
     
-    with open("public/index.html", "w") as f:
+    with open("public/opportunity_report.html", "w") as f:
         f.write(final_html)
-    logger.info("Successfully generated public/index.html")
+    logger.info("Successfully generated public/opportunity_report.html")
 
 def safe_float(value):
     try:
@@ -340,6 +336,36 @@ def calc_growth(quarterly_reports, current_idx, past_idx, key1, key2=None):
     
     return round((val_current - val_past) / abs(val_past), 4)
 
+def calculate_scores(price, ma50, ma200, high52, rev_yoy, rev_qoq, gross_margin, op_margin, free_cf, la_ratio):
+    mom_score = 0
+    if price and ma50 and price > ma50: mom_score += 2
+    if price and ma200 and price > ma200: mom_score += 2
+    if price and high52 and price >= high52 * 0.85: mom_score += 1
+    
+    rev_score = 0
+    if rev_yoy is not None:
+        if rev_yoy > 0.40: rev_score += 4
+        elif rev_yoy > 0.20: rev_score += 3
+    if rev_qoq is not None and rev_qoq > 0: rev_score += 1
+    if rev_score > 5: rev_score = 5
+    
+    prof_score = 0
+    if gross_margin is not None and gross_margin > 0.30: prof_score += 1
+    if op_margin is not None:
+        if op_margin > 0.10: prof_score += 2
+        elif op_margin > 0: prof_score += 1
+    if free_cf is not None and free_cf > 0: prof_score += 2
+    if prof_score > 5: prof_score = 5
+    
+    bs_score = 0
+    if la_ratio is not None:
+        if la_ratio < 0.40: bs_score += 5
+        elif la_ratio < 0.60: bs_score += 4
+        elif la_ratio < 0.80: bs_score += 3
+            
+    total_score = mom_score + rev_score + prof_score + bs_score
+    return mom_score, rev_score, prof_score, bs_score, total_score
+
 def main():
     api_key = os.environ.get("ALPHAVANTAGE_API_KEY")
 
@@ -369,7 +395,6 @@ def main():
     for i, symbol in enumerate(symbols):
         logger.info(f"Processing [{i+1}/{len(symbols)}]: {symbol}")
         try:
-            # 1. Get Overview FIRST to filter by Market Cap
             overview = av_client.get_overview(symbol)
             
             if overview.get("Industry", "").upper() == "SHELL COMPANIES":
@@ -378,22 +403,23 @@ def main():
 
             market_cap = safe_float(overview.get("MarketCapitalization"))
             
-            # Filter: Market Cap > $10 Billion
-            # Bypass filter if we are explicitly testing a symbol list or limit
             if not limit and not symbol_list_env and market_cap < 10000000000:
                 logger.info(f"Skipping {symbol} (Market Cap: ${market_cap:,.0f})")
                 skipped_small += 1
                 continue
-            
-            # 2. If it passes, get the rest
+                
             quote = av_client.get_global_quote(symbol)
             rsi = av_client.get_rsi(symbol)
             bs = av_client.get_balance_sheet(symbol)
             cf = av_client.get_cash_flow(symbol)
             inc = av_client.get_income_statement(symbol)
             
-            # Extract and Calculate metrics
+            # Additional Overview metrics
+            ma50 = safe_float_opt(overview.get("50DayMovingAverage"))
+            ma200 = safe_float_opt(overview.get("200DayMovingAverage"))
+            high52 = safe_float_opt(overview.get("52WeekHigh"))
             
+            # Extract and Calculate metrics
             inc_q = inc.get("quarterlyReports", [])
             bs_q = bs.get("quarterlyReports", [])
             cf_q = cf.get("quarterlyReports", [])
@@ -413,6 +439,24 @@ def main():
             op_cf = safe_float(cf_a.get("operatingCashflow"))
             capex = safe_float(cf_a.get("capitalExpenditures"))
             
+            price = safe_float_opt(quote.get("Price"))
+            
+            gross_margin = round(gross_profit / revenue, 4) if revenue > 0 else None
+            operating_margin = round(op_income / revenue, 4) if revenue > 0 else None
+            net_margin = round(net_income / revenue, 4) if revenue > 0 else None
+            
+            rev_qoq = calc_growth(inc_q, 0, 1, "totalRevenue")
+            rev_yoy = calc_growth(inc_q, 0, 4, "totalRevenue")
+            
+            la_ratio = round(liabilities / assets, 4) if assets > 0 else None
+            free_cf = op_cf - capex if op_cf is not None and capex is not None else None
+            
+            mom_score, rev_score, prof_score, bs_score, total_score = calculate_scores(
+                price, ma50, ma200, high52, rev_yoy, rev_qoq, gross_margin, operating_margin, free_cf, la_ratio
+            )
+            
+            logger.info(f"Score for {symbol}: Total={total_score} (Mom={mom_score}, Rev={rev_score}, Prof={prof_score}, BS={bs_score})")
+            
             row = {
                 # 1. General
                 "Symbol": symbol,
@@ -420,50 +464,60 @@ def main():
                 "Sector": overview.get("Sector"),
                 "Industry": overview.get("Industry"),
                 
-                # 2. Market
-                "Price": quote.get("Price"),
+                # 2. Scores
+                "Total Score": total_score,
+                "Mom Score": mom_score,
+                "Rev Score": rev_score,
+                "Prof Score": prof_score,
+                "BS Score": bs_score,
+                
+                # 3. Market
+                "Price": price,
                 "Volume": quote.get("Volume"),
                 "Market Cap": market_cap,
                 "RSI (14)": rsi,
+                "50d MA": ma50,
+                "200d MA": ma200,
+                "52w High": high52,
                 
-                # 3. Valuation
+                # 4. Valuation
                 "P/E Ratio": overview.get("PERatio"),
                 "EPS": overview.get("EPS"),
                 
-                # 4. Profitability
+                # 5. Profitability
                 "Revenue": revenue,
-                "Gross Margin": round(gross_profit / revenue, 4) if revenue > 0 else None,
-                "Operating Margin": round(op_income / revenue, 4) if revenue > 0 else None,
-                "Net Margin": round(net_income / revenue, 4) if revenue > 0 else None,
+                "Gross Margin": gross_margin,
+                "Operating Margin": operating_margin,
+                "Net Margin": net_margin,
                 
-                # 5. Income Growth
-                "Rev QoQ": calc_growth(inc_q, 0, 1, "totalRevenue"),
-                "Rev YoY": calc_growth(inc_q, 0, 4, "totalRevenue"),
+                # 6. Income Growth
+                "Rev QoQ": rev_qoq,
+                "Rev YoY": rev_yoy,
                 "Net Inc QoQ": calc_growth(inc_q, 0, 1, "netIncome"),
                 "Net Inc YoY": calc_growth(inc_q, 0, 4, "netIncome"),
                 
-                # 6. Balance Sheet
+                # 7. Balance Sheet
                 "Asset": assets,
                 "Liability": liabilities,
-                "L/A Ratio": round(liabilities / assets, 4) if assets > 0 else None,
+                "L/A Ratio": la_ratio,
                 
-                # 7. BS Growth
+                # 8. BS Growth
                 "Asset QoQ": calc_growth(bs_q, 0, 1, "totalAssets"),
                 "Asset YoY": calc_growth(bs_q, 0, 4, "totalAssets"),
                 
-                # 8. Cash Flow
+                # 9. Cash Flow
                 "Operating CF": op_cf,
                 "CapEx": capex,
-                "Free CF": op_cf - capex,
+                "Free CF": free_cf,
                 
-                # 9. CF Growth
+                # 10. CF Growth
                 "Op CF QoQ": calc_growth(cf_q, 0, 1, "operatingCashflow"),
                 "Op CF YoY": calc_growth(cf_q, 0, 4, "operatingCashflow"),
                 "Free CF QoQ": calc_growth(cf_q, 0, 1, "operatingCashflow", "capitalExpenditures"),
                 "Free CF YoY": calc_growth(cf_q, 0, 4, "operatingCashflow", "capitalExpenditures"),
                 
-                # 10. Meta
-                "Last Updated": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+                # 11. Meta
+                "Last Updated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
             }
             results.append(row)
         except Exception as e:
@@ -471,8 +525,6 @@ def main():
             continue
 
     logger.info(f"Scan complete. Total processed: {len(results)}. Skipped <$10B: {skipped_small}")
-    if total_listings > 0:
-        logger.info(f"Post-filter percentage: {(len(results) / len(symbols)) * 100:.2f}% of processed symbols passed.")
 
     if not results:
         logger.warning("No data collected.")
@@ -482,7 +534,7 @@ def main():
     
     # Save raw data
     os.makedirs("data", exist_ok=True)
-    csv_path = f"data/daily_scan_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+    csv_path = f"data/opportunity_scan_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
     df.to_csv(csv_path, index=False)
     
     # Generate HTML report

@@ -4,7 +4,7 @@ import json
 import logging
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 # Configure logging
@@ -38,81 +38,44 @@ class AlphaVantageClient:
         
         return data
 
-    def get_active_listings(self):
-        logger.info("Fetching active US equity listings...")
-        self._wait()
-        params = {
-            "function": "LISTING_STATUS",
-            "state": "active",
-            "apikey": self.api_key
-        }
-        response = requests.get(self.base_url, params=params)
-        response.raise_for_status()
-        
-        from io import StringIO
-        df = pd.read_csv(StringIO(response.text))
-        
-        us_equities = df[df['assetType'] == 'Stock']
-        logger.info(f"Found {len(us_equities)} active US Equities.")
-        return us_equities['symbol'].tolist()
-
-    def get_global_quote(self, symbol):
-        params = {"function": "GLOBAL_QUOTE", "symbol": symbol}
-        data = self._make_request(params)
-        quote = data.get("Global Quote", {})
-        return {
-            "Price": quote.get("05. price", None),
-            "Volume": quote.get("06. volume", None),
-            "Latest Trading Day": quote.get("07. latest trading day", None)
-        }
-
-    def get_rsi(self, symbol):
-        params = {
-            "function": "RSI",
-            "symbol": symbol,
-            "interval": "daily",
-            "time_period": 14,
-            "series_type": "close"
-        }
-        data = self._make_request(params)
-        if "Technical Analysis: RSI" in data:
-            dates = list(data["Technical Analysis: RSI"].keys())
-            if dates:
-                latest_date = dates[0]
-                return data["Technical Analysis: RSI"][latest_date].get("RSI")
-        return None
+    def get_time_series_daily(self, symbol):
+        params = {"function": "TIME_SERIES_DAILY", "symbol": symbol, "outputsize": "full"}
+        return self._make_request(params)
 
     def get_overview(self, symbol):
         params = {"function": "OVERVIEW", "symbol": symbol}
-        data = self._make_request(params)
-        return data
+        return self._make_request(params)
 
     def get_balance_sheet(self, symbol):
         params = {"function": "BALANCE_SHEET", "symbol": symbol}
-        data = self._make_request(params)
-        return data
+        return self._make_request(params)
 
     def get_cash_flow(self, symbol):
         params = {"function": "CASH_FLOW", "symbol": symbol}
-        data = self._make_request(params)
-        return data
+        return self._make_request(params)
 
     def get_income_statement(self, symbol):
         params = {"function": "INCOME_STATEMENT", "symbol": symbol}
-        data = self._make_request(params)
-        return data
+        return self._make_request(params)
+
+def filter_quarterly_reports(reports, target_date):
+    filtered = []
+    for r in reports:
+        dt_str = r.get("fiscalDateEnding")
+        if dt_str and dt_str <= target_date:
+            filtered.append(r)
+    return filtered
 
 def generate_html_report(df):
     os.makedirs("public", exist_ok=True)
     
-    # Add basic styling and DataTables integration with ColVis
     html_template = """
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Daily Stock Scan</title>
+        <title>Point-in-Time Backtest Report</title>
         <!-- DataTables CSS -->
         <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.css">
         <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/buttons/2.4.2/css/buttons.dataTables.min.css">
@@ -126,16 +89,15 @@ def generate_html_report(df):
             thead th {{ background-color: #f8f9fa; font-weight: 600; color: #1d1d1f; }}
             thead input {{ width: 100%; padding: 3px; box-sizing: border-box; margin-top: 5px; font-size: 0.8em; font-weight: normal; }}
             .dt-buttons {{ margin-bottom: 15px; }}
+            .score-high {{ color: green; font-weight: bold; }}
+            .score-med {{ color: orange; font-weight: bold; }}
+            .score-low {{ color: red; }}
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>Daily US Stocks Scan</h1>
-            <div style="margin-bottom: 15px;">
-                <strong>General Scan</strong> | 
-                <a href="opportunity_report.html" style="text-decoration: none; color: #0066cc;">Opportunity Scanner</a>
-            </div>
-            <div class="timestamp">Last Updated: {timestamp}</div>
+            <h1>Point-in-Time Backtest Report</h1>
+            <div class="timestamp">Backtest Target Date: {target_date} | Run Time: {timestamp}</div>
             {table}
         </div>
         
@@ -162,24 +124,19 @@ def generate_html_report(df):
                     .addClass('filters')
                     .appendTo('#stockTable thead');
             
-                // Custom filtering function for mathematical operators
+                // Custom filtering function
                 $.fn.dataTable.ext.search.push(function(settings, data, dataIndex, rowData) {{
                     var isVisible = true;
-                    
                     $('#stockTable .filters input').each(function() {{
                         var index = $(this).data('col-index');
                         var searchStr = $(this).val().trim();
                         if (searchStr === "") return true;
-                        
-                        // We use the raw original data (rowData) from pandas to do pure numeric filtering
                         var cellDataRaw = rowData[index];
                         var numericData = parseFloat(cellDataRaw);
-                        
                         if (searchStr.match(/^[<>]=?\\s*[\\-]?\\d+\\.?\\d*$/)) {{
                             if (isNaN(numericData)) {{ isVisible = false; return false; }}
                             var operator = searchStr.match(/^[<>]=?/)[0];
                             var val = parseFloat(searchStr.substring(operator.length));
-                            
                             if (operator === '>' && !(numericData > val)) isVisible = false;
                             if (operator === '>=' && !(numericData >= val)) isVisible = false;
                             if (operator === '<' && !(numericData < val)) isVisible = false;
@@ -187,8 +144,6 @@ def generate_html_report(df):
                         }} 
                         else if (searchStr.match(/^[\\-]?\\d+\\.?\\d*\\s*-\\s*[\\-]?\\d+\\.?\\d*$/)) {{
                             if (isNaN(numericData)) {{ isVisible = false; return false; }}
-                            
-                            // Handling negative numbers in ranges (e.g., -10--5)
                             var min, max;
                             if (searchStr.startsWith('-')) {{
                                 var midHyphen = searchStr.indexOf('-', 1);
@@ -199,7 +154,6 @@ def generate_html_report(df):
                                 min = parseFloat(parts[0]);
                                 max = parseFloat(parts[1]);
                             }}
-                            
                             if (numericData < min || numericData > max) isVisible = false;
                         }}
                         else if (searchStr.startsWith("=")) {{
@@ -208,62 +162,48 @@ def generate_html_report(df):
                             if (numericData !== val) isVisible = false;
                         }}
                         else {{
-                            // Text search fallback - use display data for this
                             if (data[index].toLowerCase().indexOf(searchStr.toLowerCase()) === -1) {{
                                 isVisible = false;
                             }}
                         }}
                     }});
-                    
                     return isVisible;
                 }});
 
                 var table = $('#stockTable').DataTable({{
                     dom: 'Bfrtip',
-                    buttons: [
-                        'colvis',
-                        {{
-                            extend: 'csv',
-                            text: 'Download CSV',
-                            exportOptions: {{
-                                orthogonal: 'export'
-                            }}
-                        }}
-                    ],
+                    buttons: ['colvis', {{extend: 'csv', text: 'Download CSV'}}],
                     orderCellsTop: true,
                     fixedHeader: true,
                     pageLength: 50,
+                    order: [[4, "desc"]], // Sort by Total Score descending by default (assuming index 4)
                     columnDefs: [
                         {{
-                            targets: [6, 10, 18, 19, 23, 24, 25], // Financials
+                            targets: [4], // Total Score
+                            render: function(data, type, row) {{
+                                if (type === 'display') {{
+                                    var val = parseFloat(data);
+                                    if (val >= 15) return '<span class="score-high">' + val + '</span>';
+                                    if (val >= 10) return '<span class="score-med">' + val + '</span>';
+                                    return '<span class="score-low">' + val + '</span>';
+                                }}
+                                return data;
+                            }}
+                        }},
+                        {{
+                            targets: [10, 11, 12, 13, 14, 22, 23, 27, 28, 29], // Financials / Caps (adjust indices based on final columns)
                             render: function(data, type, row) {{
                                 if (type === 'display') return formatNumber(parseFloat(data));
-                                return data; // Raw float for sort/filter/export
+                                return data;
                             }}
                         }},
                         {{
-                            targets: [5], // Volume
-                            render: function(data, type, row) {{
-                                if (type === 'display') return parseFloat(data).toLocaleString();
-                                return data; // Raw float for sort/filter/export
-                            }}
-                        }},
-                        {{
-                            targets: [7], // RSI (14)
-                            render: function(data, type, row) {{
-                                if (type === 'display' && data !== null && !isNaN(data)) {{
-                                    return Math.round(parseFloat(data));
-                                }}
-                                return data; // Raw float for sort/filter/export
-                            }}
-                        }},
-                        {{
-                            targets: [11, 12, 13, 14, 15, 16, 17, 21, 22, 26, 27, 28, 29], // Margins/Ratios/Growth
+                            targets: [15, 16, 17, 18, 19, 20, 21, 25, 26, 30, 31, 32, 33], // Margins/Ratios/Growth (adjust indices)
                             render: function(data, type, row) {{
                                 if (type === 'display' && data !== null && data !== "") {{
                                     return (parseFloat(data) * 100).toFixed(2) + "%";
                                 }}
-                                return data; // Raw float for sort/filter/export
+                                return data; 
                             }}
                         }}
                     ],
@@ -274,7 +214,7 @@ def generate_html_report(df):
                             var filterCell = $('.filters th').eq(headerCell.index());
                             var title = headerCell.text();
                             
-                            var isNumeric = /Price|Volume|RSI|Cap|Ratio|EPS|Asset|Liability|Revenue|Margin|CF|CapEx|YoY|QoQ/.test(title);
+                            var isNumeric = /Score|Price|Volume|Cap|Ratio|EPS|Asset|Liability|Revenue|Margin|CF|CapEx|YoY|QoQ|High|Average/.test(title);
                             var placeholder = isNumeric ? ">50, 30-70" : "Filter...";
                             
                             $(filterCell).html('<input type="text" data-col-index="' + colIdx + '" placeholder="' + placeholder + '" />');
@@ -289,15 +229,15 @@ def generate_html_report(df):
     </body>
     </html>
     """
-    
+    target_date = os.environ.get("TARGET_DATE", "2025-06-30")
     html_table = df.to_html(index=False, table_id="stockTable", classes='display', border=0)
-    current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     
-    final_html = html_template.format(timestamp=current_time, table=html_table)
+    final_html = html_template.format(target_date=target_date, timestamp=current_time, table=html_table)
     
-    with open("public/index.html", "w") as f:
+    with open("public/backtest_report.html", "w") as f:
         f.write(final_html)
-    logger.info("Successfully generated public/index.html")
+    logger.info("Successfully generated public/backtest_report.html")
 
 def safe_float(value):
     try:
@@ -340,78 +280,152 @@ def calc_growth(quarterly_reports, current_idx, past_idx, key1, key2=None):
     
     return round((val_current - val_past) / abs(val_past), 4)
 
+def calculate_scores(price, ma50, ma200, high52, rev_yoy, rev_qoq, gross_margin, op_margin, free_cf, la_ratio):
+    mom_score = 0
+    if price and ma50 and price > ma50: mom_score += 2
+    if price and ma200 and price > ma200: mom_score += 2
+    if price and high52 and price >= high52 * 0.85: mom_score += 1
+    
+    rev_score = 0
+    if rev_yoy is not None:
+        if rev_yoy > 0.40: rev_score += 4
+        elif rev_yoy > 0.20: rev_score += 3
+    if rev_qoq is not None and rev_qoq > 0: rev_score += 1
+    if rev_score > 5: rev_score = 5
+    
+    prof_score = 0
+    if gross_margin is not None and gross_margin > 0.30: prof_score += 1
+    if op_margin is not None:
+        if op_margin > 0.10: prof_score += 2
+        elif op_margin > 0: prof_score += 1
+    if free_cf is not None and free_cf > 0: prof_score += 2
+    if prof_score > 5: prof_score = 5
+    
+    bs_score = 0
+    if la_ratio is not None:
+        if la_ratio < 0.40: bs_score += 5
+        elif la_ratio < 0.60: bs_score += 4
+        elif la_ratio < 0.80: bs_score += 3
+            
+    total_score = mom_score + rev_score + prof_score + bs_score
+    return mom_score, rev_score, prof_score, bs_score, total_score
+
 def main():
     api_key = os.environ.get("ALPHAVANTAGE_API_KEY")
-
     if not api_key:
         logger.error("Missing ALPHAVANTAGE_API_KEY environment variable.")
         return
 
     av_client = AlphaVantageClient(api_key=api_key)
+    target_date = os.environ.get("TARGET_DATE", "2025-06-30")
+    logger.info(f"Running point-in-time backtest for date: {target_date}")
     
-    limit = os.environ.get("SYMBOL_LIMIT")
-    symbol_list_env = os.environ.get("SYMBOL_LIST")
-    
-    if symbol_list_env:
-        symbols = [s.strip() for s in symbol_list_env.split(",") if s.strip()]
-        logger.info(f"Using provided SYMBOL_LIST: {symbols}")
-        total_listings = len(symbols)
-    else:
-        symbols = av_client.get_active_listings()
-        total_listings = len(symbols)
-        if limit:
-            symbols = symbols[:int(limit)]
-            logger.info(f"Limiting to {limit} symbols for testing.")
+    symbol_list_env = os.environ.get("SYMBOL_LIST", "MU")
+    symbols = [s.strip() for s in symbol_list_env.split(",") if s.strip()]
+    logger.info(f"Using provided SYMBOL_LIST: {symbols}")
 
     results = []
-    skipped_small = 0
     
     for i, symbol in enumerate(symbols):
         logger.info(f"Processing [{i+1}/{len(symbols)}]: {symbol}")
         try:
-            # 1. Get Overview FIRST to filter by Market Cap
+            # 1. Fetch historical prices
+            time_series = av_client.get_time_series_daily(symbol)
+            ts_data = time_series.get("Time Series (Daily)", {})
+            
+            # Determine target_date dynamically if requested, else use global target_date
+            dynamic_mode = os.environ.get("DYNAMIC_INFLECTION", "true").lower() == "true"
+            symbol_target_date = target_date
+            
+            all_dates_asc = sorted(ts_data.keys())
+            if dynamic_mode:
+                valid_dates_for_inflection = [d for d in all_dates_asc if d >= "2024-01-01"]
+                max_ret = -1
+                best_date = None
+                for j in range(20, len(valid_dates_for_inflection)):
+                    d_now = valid_dates_for_inflection[j]
+                    d_prev = valid_dates_for_inflection[j-20]
+                    p_now = safe_float(ts_data[d_now]["4. close"])
+                    p_prev = safe_float(ts_data[d_prev]["4. close"])
+                    if p_prev > 0:
+                        ret = (p_now - p_prev) / p_prev
+                        if ret > max_ret:
+                            max_ret = ret
+                            best_date = d_now
+                
+                if best_date:
+                    symbol_target_date = best_date
+                    logger.info(f"Dynamic inflection point for {symbol}: {symbol_target_date} (20-day return: {max_ret*100:.1f}%)")
+                else:
+                    logger.warning(f"Could not find dynamic inflection point for {symbol}. Using global target.")
+            
+            # Filter dates and sort descending relative to the symbol's target date
+            valid_dates = sorted([d for d in ts_data.keys() if d <= symbol_target_date], reverse=True)
+            
+            if not valid_dates:
+                logger.warning(f"No price data available for {symbol} on or before {symbol_target_date}")
+                continue
+                
+            # Get latest price as of target date
+            latest_valid_date = valid_dates[0]
+            price = safe_float_opt(ts_data[latest_valid_date].get("4. close"))
+            
+            # Calculate MAs and Highs
+            prices_last_50 = [safe_float(ts_data[d]["4. close"]) for d in valid_dates[:50]]
+            prices_last_200 = [safe_float(ts_data[d]["4. close"]) for d in valid_dates[:200]]
+            prices_last_252 = [safe_float(ts_data[d]["2. high"]) for d in valid_dates[:252]] # 52w high roughly 252 trading days
+            
+            ma50 = sum(prices_last_50) / len(prices_last_50) if prices_last_50 else None
+            ma200 = sum(prices_last_200) / len(prices_last_200) if prices_last_200 else None
+            high52 = max(prices_last_252) if prices_last_252 else None
+            
+            # 2. Get Overview for basic info
             overview = av_client.get_overview(symbol)
-            
-            if overview.get("Industry", "").upper() == "SHELL COMPANIES":
-                logger.info(f"Skipping {symbol} (Shell Company)")
-                continue
 
-            market_cap = safe_float(overview.get("MarketCapitalization"))
-            
-            # Filter: Market Cap > $10 Billion
-            # Bypass filter if we are explicitly testing a symbol list or limit
-            if not limit and not symbol_list_env and market_cap < 10000000000:
-                logger.info(f"Skipping {symbol} (Market Cap: ${market_cap:,.0f})")
-                skipped_small += 1
-                continue
-            
-            # 2. If it passes, get the rest
-            quote = av_client.get_global_quote(symbol)
-            rsi = av_client.get_rsi(symbol)
+            # 3. Fetch Financials and filter by TARGET_DATE
             bs = av_client.get_balance_sheet(symbol)
             cf = av_client.get_cash_flow(symbol)
             inc = av_client.get_income_statement(symbol)
             
-            # Extract and Calculate metrics
+            inc_q = filter_quarterly_reports(inc.get("quarterlyReports", []), symbol_target_date)
+            bs_q = filter_quarterly_reports(bs.get("quarterlyReports", []), symbol_target_date)
+            cf_q = filter_quarterly_reports(cf.get("quarterlyReports", []), symbol_target_date)
             
-            inc_q = inc.get("quarterlyReports", [])
-            bs_q = bs.get("quarterlyReports", [])
-            cf_q = cf.get("quarterlyReports", [])
+            if not inc_q or not bs_q or not cf_q:
+                logger.warning(f"Missing fundamental data for {symbol} on or before {symbol_target_date}")
+                continue
 
-            inc_a = inc.get("annualReports", [{}])[0] if inc.get("annualReports") else {}
-            bs_a = bs.get("annualReports", [{}])[0] if bs.get("annualReports") else {}
-            cf_a = cf.get("annualReports", [{}])[0] if cf.get("annualReports") else {}
+            # Latest fundamental data as of TARGET_DATE
+            latest_inc = inc_q[0]
+            latest_bs = bs_q[0]
+            latest_cf = cf_q[0]
 
-            revenue = safe_float(inc_a.get("totalRevenue"))
-            gross_profit = safe_float(inc_a.get("grossProfit"))
-            op_income = safe_float(inc_a.get("operatingIncome"))
-            net_income = safe_float(inc_a.get("netIncome"))
+            revenue = safe_float(latest_inc.get("totalRevenue"))
+            gross_profit = safe_float(latest_inc.get("grossProfit"))
+            op_income = safe_float(latest_inc.get("operatingIncome"))
+            net_income = safe_float(latest_inc.get("netIncome"))
             
-            assets = safe_float(bs_a.get("totalAssets"))
-            liabilities = safe_float(bs_a.get("totalLiabilities"))
+            assets = safe_float(latest_bs.get("totalAssets"))
+            liabilities = safe_float(latest_bs.get("totalLiabilities"))
             
-            op_cf = safe_float(cf_a.get("operatingCashflow"))
-            capex = safe_float(cf_a.get("capitalExpenditures"))
+            op_cf = safe_float(latest_cf.get("operatingCashflow"))
+            capex = safe_float(latest_cf.get("capitalExpenditures"))
+            
+            gross_margin = round(gross_profit / revenue, 4) if revenue > 0 else None
+            operating_margin = round(op_income / revenue, 4) if revenue > 0 else None
+            net_margin = round(net_income / revenue, 4) if revenue > 0 else None
+            
+            rev_qoq = calc_growth(inc_q, 0, 1, "totalRevenue")
+            rev_yoy = calc_growth(inc_q, 0, 4, "totalRevenue")
+            
+            la_ratio = round(liabilities / assets, 4) if assets > 0 else None
+            free_cf = op_cf - capex if op_cf is not None and capex is not None else None
+            
+            mom_score, rev_score, prof_score, bs_score, total_score = calculate_scores(
+                price, ma50, ma200, high52, rev_yoy, rev_qoq, gross_margin, operating_margin, free_cf, la_ratio
+            )
+            
+            logger.info(f"Score for {symbol} as of {symbol_target_date}: Total={total_score} (Mom={mom_score}, Rev={rev_score}, Prof={prof_score}, BS={bs_score})")
             
             row = {
                 # 1. General
@@ -420,59 +434,64 @@ def main():
                 "Sector": overview.get("Sector"),
                 "Industry": overview.get("Industry"),
                 
-                # 2. Market
-                "Price": quote.get("Price"),
-                "Volume": quote.get("Volume"),
-                "Market Cap": market_cap,
-                "RSI (14)": rsi,
+                # 2. Scores
+                "Total Score": total_score,
+                "Mom Score": mom_score,
+                "Rev Score": rev_score,
+                "Prof Score": prof_score,
+                "BS Score": bs_score,
                 
-                # 3. Valuation
-                "P/E Ratio": overview.get("PERatio"),
-                "EPS": overview.get("EPS"),
+                # 3. Market Point-in-Time
+                "Price": price,
+                "50d MA": ma50,
+                "200d MA": ma200,
+                "52w High": high52,
                 
-                # 4. Profitability
+                # 4. Valuation (We omit point-in-time P/E since it's hard to accurately calculate dynamically)
+                "P/E Ratio": None,
+                "EPS": None,
+                
+                # 5. Profitability Point-in-Time
                 "Revenue": revenue,
-                "Gross Margin": round(gross_profit / revenue, 4) if revenue > 0 else None,
-                "Operating Margin": round(op_income / revenue, 4) if revenue > 0 else None,
-                "Net Margin": round(net_income / revenue, 4) if revenue > 0 else None,
+                "Gross Margin": gross_margin,
+                "Operating Margin": operating_margin,
+                "Net Margin": net_margin,
                 
-                # 5. Income Growth
-                "Rev QoQ": calc_growth(inc_q, 0, 1, "totalRevenue"),
-                "Rev YoY": calc_growth(inc_q, 0, 4, "totalRevenue"),
+                # 6. Income Growth Point-in-Time
+                "Rev QoQ": rev_qoq,
+                "Rev YoY": rev_yoy,
                 "Net Inc QoQ": calc_growth(inc_q, 0, 1, "netIncome"),
                 "Net Inc YoY": calc_growth(inc_q, 0, 4, "netIncome"),
                 
-                # 6. Balance Sheet
+                # 7. Balance Sheet Point-in-Time
                 "Asset": assets,
                 "Liability": liabilities,
-                "L/A Ratio": round(liabilities / assets, 4) if assets > 0 else None,
+                "L/A Ratio": la_ratio,
                 
-                # 7. BS Growth
+                # 8. BS Growth Point-in-Time
                 "Asset QoQ": calc_growth(bs_q, 0, 1, "totalAssets"),
                 "Asset YoY": calc_growth(bs_q, 0, 4, "totalAssets"),
                 
-                # 8. Cash Flow
+                # 9. Cash Flow Point-in-Time
                 "Operating CF": op_cf,
                 "CapEx": capex,
-                "Free CF": op_cf - capex,
+                "Free CF": free_cf,
                 
-                # 9. CF Growth
+                # 10. CF Growth Point-in-Time
                 "Op CF QoQ": calc_growth(cf_q, 0, 1, "operatingCashflow"),
                 "Op CF YoY": calc_growth(cf_q, 0, 4, "operatingCashflow"),
                 "Free CF QoQ": calc_growth(cf_q, 0, 1, "operatingCashflow", "capitalExpenditures"),
                 "Free CF YoY": calc_growth(cf_q, 0, 4, "operatingCashflow", "capitalExpenditures"),
                 
-                # 10. Meta
-                "Last Updated": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+                # 11. Meta
+                "Backtest Date": symbol_target_date
             }
             results.append(row)
         except Exception as e:
             logger.error(f"Error processing {symbol}: {e}")
             continue
 
-    logger.info(f"Scan complete. Total processed: {len(results)}. Skipped <$10B: {skipped_small}")
-    if total_listings > 0:
-        logger.info(f"Post-filter percentage: {(len(results) / len(symbols)) * 100:.2f}% of processed symbols passed.")
+    logger.info(f"Backtest complete. Total processed: {len(results)}.")
 
     if not results:
         logger.warning("No data collected.")
@@ -482,7 +501,7 @@ def main():
     
     # Save raw data
     os.makedirs("data", exist_ok=True)
-    csv_path = f"data/daily_scan_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+    csv_path = f"data/backtest_scan_{target_date}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
     df.to_csv(csv_path, index=False)
     
     # Generate HTML report
