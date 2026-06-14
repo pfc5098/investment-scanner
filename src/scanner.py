@@ -7,100 +7,11 @@ import pandas as pd
 from datetime import datetime
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from data_fetcher import build_dataset
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-class AlphaVantageClient:
-    def __init__(self, api_key, max_req_per_min=75):
-        self.api_key = api_key
-        self.base_url = "https://www.alphavantage.co/query"
-        self.delay = 60.0 / max_req_per_min
-        self.last_request_time = 0
-
-    def _wait(self):
-        elapsed = time.time() - self.last_request_time
-        if elapsed < self.delay:
-            time.sleep(self.delay - elapsed)
-        self.last_request_time = time.time()
-
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def _make_request(self, params):
-        self._wait()
-        params['apikey'] = self.api_key
-        response = requests.get(self.base_url, params=params)
-        response.raise_for_status()
-        
-        data = response.json() if 'json' in response.headers.get('Content-Type', '') else response.text
-        if isinstance(data, dict) and "Information" in data and "rate limit" in data["Information"].lower():
-            logger.warning("Rate limit hit from API response, backing off...")
-            raise Exception("Rate limit hit")
-        
-        return data
-
-    def get_active_listings(self):
-        logger.info("Fetching active US equity listings...")
-        self._wait()
-        params = {
-            "function": "LISTING_STATUS",
-            "state": "active",
-            "apikey": self.api_key
-        }
-        response = requests.get(self.base_url, params=params)
-        response.raise_for_status()
-        
-        from io import StringIO
-        df = pd.read_csv(StringIO(response.text))
-        
-        us_equities = df[df['assetType'] == 'Stock']
-        logger.info(f"Found {len(us_equities)} active US Equities.")
-        return us_equities['symbol'].tolist()
-
-    def get_global_quote(self, symbol):
-        params = {"function": "GLOBAL_QUOTE", "symbol": symbol}
-        data = self._make_request(params)
-        quote = data.get("Global Quote", {})
-        return {
-            "Price": quote.get("05. price", None),
-            "Volume": quote.get("06. volume", None),
-            "Latest Trading Day": quote.get("07. latest trading day", None)
-        }
-
-    def get_rsi(self, symbol):
-        params = {
-            "function": "RSI",
-            "symbol": symbol,
-            "interval": "daily",
-            "time_period": 14,
-            "series_type": "close"
-        }
-        data = self._make_request(params)
-        if "Technical Analysis: RSI" in data:
-            dates = list(data["Technical Analysis: RSI"].keys())
-            if dates:
-                latest_date = dates[0]
-                return data["Technical Analysis: RSI"][latest_date].get("RSI")
-        return None
-
-    def get_overview(self, symbol):
-        params = {"function": "OVERVIEW", "symbol": symbol}
-        data = self._make_request(params)
-        return data
-
-    def get_balance_sheet(self, symbol):
-        params = {"function": "BALANCE_SHEET", "symbol": symbol}
-        data = self._make_request(params)
-        return data
-
-    def get_cash_flow(self, symbol):
-        params = {"function": "CASH_FLOW", "symbol": symbol}
-        data = self._make_request(params)
-        return data
-
-    def get_income_statement(self, symbol):
-        params = {"function": "INCOME_STATEMENT", "symbol": symbol}
-        data = self._make_request(params)
-        return data
 
 def generate_html_report(df):
     os.makedirs("public", exist_ok=True)
@@ -126,14 +37,16 @@ def generate_html_report(df):
             thead th {{ background-color: #f8f9fa; font-weight: 600; color: #1d1d1f; }}
             thead input {{ width: 100%; padding: 3px; box-sizing: border-box; margin-top: 5px; font-size: 0.8em; font-weight: normal; }}
             .dt-buttons {{ margin-bottom: 15px; }}
+            .nav {{ margin-bottom: 15px; }}
+            .nav a {{ text-decoration: none; color: #0066cc; }}
         </style>
     </head>
     <body>
         <div class="container">
             <h1>Daily US Stocks Scan</h1>
-            <div style="margin-bottom: 15px;">
-                <strong>General Scan</strong> | 
-                <a href="opportunity_report.html" style="{{text-decoration: none; color: #0066cc;}}">Opportunity Scanner</a>
+            <div class="nav">
+                <strong>General Scan</strong> |
+                <a href="opportunity_report.html">Opportunity Scanner</a>
             </div>
             <div class="timestamp">Last Updated: {timestamp}</div>
             {table}
@@ -347,51 +260,23 @@ def main():
         logger.error("Missing ALPHAVANTAGE_API_KEY environment variable.")
         return
 
-    av_client = AlphaVantageClient(api_key=api_key)
-    
-    limit = os.environ.get("SYMBOL_LIMIT")
-    symbol_list_env = os.environ.get("SYMBOL_LIST")
-    
-    if symbol_list_env:
-        symbols = [s.strip() for s in symbol_list_env.split(",") if s.strip()]
-        logger.info(f"Using provided SYMBOL_LIST: {symbols}")
-        total_listings = len(symbols)
-    else:
-        symbols = av_client.get_active_listings()
-        total_listings = len(symbols)
-        if limit:
-            symbols = symbols[:int(limit)]
-            logger.info(f"Limiting to {limit} symbols for testing.")
+    max_req = int(os.environ.get("MAX_REQ_PER_MIN", "300"))
+    dataset = build_dataset(api_key, max_req_per_min=max_req)
 
     results = []
-    skipped_small = 0
-    
-    for i, symbol in enumerate(symbols):
-        logger.info(f"Processing [{i+1}/{len(symbols)}]: {symbol}")
+
+    for i, (symbol, payload) in enumerate(dataset.items()):
+        logger.info(f"Processing [{i+1}/{len(dataset)}]: {symbol}")
         try:
-            # 1. Get Overview FIRST to filter by Market Cap
-            overview = av_client.get_overview(symbol)
-            
-            if overview.get("Industry", "").upper() == "SHELL COMPANIES":
-                logger.info(f"Skipping {symbol} (Shell Company)")
-                continue
+            overview = payload["overview"]
+            quote = payload["quote"]
+            rsi = payload["rsi"]
+            bs = payload["balance_sheet"]
+            cf = payload["cash_flow"]
+            inc = payload["income_statement"]
 
             market_cap = safe_float(overview.get("MarketCapitalization"))
-            
-            # Filter: Market Cap > $10 Billion
-            # Bypass filter if we are explicitly testing a symbol list or limit
-            if not limit and not symbol_list_env and market_cap < 10000000000:
-                logger.info(f"Skipping {symbol} (Market Cap: ${market_cap:,.0f})")
-                skipped_small += 1
-                continue
-            
-            # 2. If it passes, get the rest
-            quote = av_client.get_global_quote(symbol)
-            rsi = av_client.get_rsi(symbol)
-            bs = av_client.get_balance_sheet(symbol)
-            cf = av_client.get_cash_flow(symbol)
-            inc = av_client.get_income_statement(symbol)
-            
+
             # Extract and Calculate metrics
             
             inc_q = inc.get("quarterlyReports", [])
@@ -470,9 +355,7 @@ def main():
             logger.error(f"Error processing {symbol}: {e}")
             continue
 
-    logger.info(f"Scan complete. Total processed: {len(results)}. Skipped <$10B: {skipped_small}")
-    if total_listings > 0:
-        logger.info(f"Post-filter percentage: {(len(results) / len(symbols)) * 100:.2f}% of processed symbols passed.")
+    logger.info(f"Scan complete. Total processed: {len(results)}.")
 
     if not results:
         logger.warning("No data collected.")

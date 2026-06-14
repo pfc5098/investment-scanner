@@ -21,10 +21,12 @@ concurrency:
 jobs:
   scan-and-build:
     runs-on: ubuntu-latest
-    
-    # We may need a longer timeout if there are many stocks and we are rate limited to 75/min
-    # ~5000 stocks * (3 requests / stock) / 75 requests/min = 200 mins = ~3.5 hours
-    timeout-minutes: 360
+
+    # Data is fetched once (concurrently) and cached, then shared by both scanners.
+    # At MAX_REQ_PER_MIN=600 the full ~8,400-stock universe completes in well under
+    # an hour. 120 min leaves generous margin and fails fast if something stalls.
+    # (GitHub-hosted runners hard-cap a single job at 6 hours regardless.)
+    timeout-minutes: 120
 
     steps:
       - name: Checkout repository
@@ -48,6 +50,7 @@ jobs:
       - name: Run regular scanner script
         env:
           ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+          MAX_REQ_PER_MIN: '600'  # API tier sustains far more; raise/lower to taste
           # SYMBOL_LIMIT: 10  # Uncomment to run a quick test with 10 symbols
         run: |
           uv run python src/scanner.py
@@ -55,6 +58,7 @@ jobs:
       - name: Run opportunity scanner script
         env:
           ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+          MAX_REQ_PER_MIN: '600'  # Reuses the cache written by the step above
           # SYMBOL_LIMIT: 10
         run: |
           uv run python src/opportunity_scanner.py
