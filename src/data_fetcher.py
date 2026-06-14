@@ -17,7 +17,6 @@ import time
 import logging
 import threading
 from io import StringIO
-from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
@@ -39,36 +38,38 @@ def _safe_float(value):
 
 
 class RateLimiter:
-    """Thread-safe sliding-window limiter: at most ``max_per_min`` acquisitions
-    in any rolling 60-second window."""
+    """Thread-safe *even-spacing* limiter.
+
+    Alpha Vantage rejects bursts ("Burst pattern detected ... no more than 5
+    requests per second"), so a sliding window that allows ``max_per_min``
+    requests at once is not enough — the requests must be spread evenly. This
+    limiter hands out request slots spaced ``60 / max_per_min`` seconds apart
+    across all threads, so concurrency never produces a burst."""
 
     def __init__(self, max_per_min):
-        self.max_per_min = max_per_min
+        self.interval = 60.0 / max_per_min
         self._lock = threading.Lock()
-        self._calls = deque()
+        self._next_slot = 0.0
 
     def acquire(self):
-        while True:
-            with self._lock:
-                now = time.monotonic()
-                while self._calls and now - self._calls[0] >= 60:
-                    self._calls.popleft()
-                if len(self._calls) < self.max_per_min:
-                    self._calls.append(now)
-                    return
-                sleep_for = 60 - (now - self._calls[0])
-            time.sleep(max(sleep_for, 0.01))
+        with self._lock:
+            now = time.monotonic()
+            slot = self._next_slot if self._next_slot > now else now
+            self._next_slot = slot + self.interval
+        delay = slot - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
 
 
 class FetchClient:
     """Alpha Vantage client safe to call from many threads at once."""
 
-    def __init__(self, api_key, max_req_per_min=300):
+    def __init__(self, api_key, max_req_per_min=75):
         self.api_key = api_key
         self.limiter = RateLimiter(max_req_per_min)
         self.session = requests.Session()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
     def _request(self, params):
         self.limiter.acquire()
         params = {**params, "apikey": self.api_key}
@@ -77,9 +78,15 @@ class FetchClient:
 
         ctype = response.headers.get("Content-Type", "")
         data = response.json() if "json" in ctype else response.text
-        if isinstance(data, dict) and "Information" in data and "rate limit" in data["Information"].lower():
-            logger.warning("Rate limit hit from API response, backing off...")
-            raise Exception("Rate limit hit")
+        # Alpha Vantage signals throttling with an "Information" or "Note" key
+        # (e.g. "Burst pattern detected...", "...standard API rate limit...").
+        # A real OVERVIEW / statement / quote response never contains these, so
+        # treat any such response as a retryable throttle rather than letting an
+        # empty payload masquerade as a $0-market-cap company that gets filtered.
+        if isinstance(data, dict) and ("Information" in data or "Note" in data):
+            msg = data.get("Information") or data.get("Note") or ""
+            logger.warning(f"API throttled, backing off: {str(msg)[:120]}")
+            raise Exception("API throttled")
         return data
 
     def active_listings(self):
@@ -124,7 +131,7 @@ class FetchClient:
         return self._request({"function": "INCOME_STATEMENT", "symbol": symbol})
 
 
-def build_dataset(api_key, max_req_per_min=300, workers=16):
+def build_dataset(api_key, max_req_per_min=75, workers=16):
     """Return ``{symbol: {overview, quote, rsi, balance_sheet, cash_flow,
     income_statement}}`` for every large-cap survivor, fetched concurrently.
 

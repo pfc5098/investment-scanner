@@ -328,7 +328,7 @@ def main():
         logger.error("Missing ALPHAVANTAGE_API_KEY environment variable.")
         return
 
-    max_req = int(os.environ.get("MAX_REQ_PER_MIN", "300"))
+    max_req = int(os.environ.get("MAX_REQ_PER_MIN", "75"))
     dataset = build_dataset(api_key, max_req_per_min=max_req)
 
     results = []

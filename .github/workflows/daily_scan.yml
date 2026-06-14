@@ -23,10 +23,11 @@ jobs:
     runs-on: ubuntu-latest
 
     # Data is fetched once (concurrently) and cached, then shared by both scanners.
-    # At MAX_REQ_PER_MIN=600 the full ~8,400-stock universe completes in well under
-    # an hour. 120 min leaves generous margin and fails fast if something stalls.
-    # (GitHub-hosted runners hard-cap a single job at 6 hours regardless.)
-    timeout-minutes: 120
+    # Alpha Vantage throttles both bursts (>5 req/sec) and a per-minute plan
+    # quota, so requests are evenly paced at MAX_REQ_PER_MIN=75 (the proven-safe
+    # rate); the full ~8,400-stock universe completes in ~2.5-3h. 300 min leaves
+    # margin under the 6-hour GitHub-hosted-runner hard cap.
+    timeout-minutes: 300
 
     steps:
       - name: Checkout repository
@@ -50,7 +51,7 @@ jobs:
       - name: Run regular scanner script
         env:
           ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
-          MAX_REQ_PER_MIN: '600'  # API tier sustains far more; raise/lower to taste
+          MAX_REQ_PER_MIN: '75'  # API tier sustains far more; raise/lower to taste
           # SYMBOL_LIMIT: 10  # Uncomment to run a quick test with 10 symbols
         run: |
           uv run python src/scanner.py
@@ -58,7 +59,7 @@ jobs:
       - name: Run opportunity scanner script
         env:
           ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
-          MAX_REQ_PER_MIN: '600'  # Reuses the cache written by the step above
+          MAX_REQ_PER_MIN: '75'  # Reuses the cache written by the step above
           # SYMBOL_LIMIT: 10
         run: |
           uv run python src/opportunity_scanner.py
