@@ -128,16 +128,34 @@ def generate_html_report(df):
             .score-high {{ color: green; font-weight: bold; }}
             .score-med {{ color: orange; font-weight: bold; }}
             .score-low {{ color: red; }}
+            .nav {{ margin-bottom: 15px; }}
+            .nav a {{ text-decoration: none; color: #0066cc; }}
+            .legend {{ background: #f8f9fa; border: 1px solid #e5e5e7; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 0.85em; }}
+            .legend summary {{ cursor: pointer; font-weight: 600; color: #1d1d1f; }}
+            .legend ul {{ margin: 10px 0 4px 0; padding-left: 18px; }}
+            .legend li {{ margin-bottom: 6px; line-height: 1.45; }}
+            .legend .name {{ font-weight: 600; }}
+            .legend .max {{ color: #86868b; font-weight: normal; }}
         </style>
     </head>
     <body>
         <div class="container">
             <h1>Opportunity Scanner Report</h1>
-            <div style="margin-bottom: 15px;">
-                <a href="index.html" style="{{text-decoration: none; color: #0066cc;}}">General Scan</a> | 
+            <div class="nav">
+                <a href="index.html">General Scan</a> |
                 <strong>Opportunity Scanner</strong>
             </div>
             <div class="timestamp">Last Updated: {timestamp}</div>
+            <details class="legend">
+                <summary>How the Total Score works (0&ndash;20)</summary>
+                <ul>
+                    <li><span class="name">Mom Score</span> <span class="max">(0&ndash;5)</span> &mdash; Price momentum. +2 if price is above its 50-day moving average, +2 if above its 200-day average, +1 if within 15% of the 52-week high.</li>
+                    <li><span class="name">Rev Score</span> <span class="max">(0&ndash;5)</span> &mdash; Revenue growth. +4 if year-over-year revenue is up &gt;40% (+3 if &gt;20%), and +1 if the latest quarter grew vs. the prior quarter.</li>
+                    <li><span class="name">Prof Score</span> <span class="max">(0&ndash;5)</span> &mdash; Profitability. +1 for gross margin &gt;30%, +2 for operating margin &gt;10% (+1 if just positive), +2 for positive free cash flow.</li>
+                    <li><span class="name">BS Score</span> <span class="max">(0&ndash;5)</span> &mdash; Balance-sheet strength via the liabilities-to-assets ratio: +5 if &lt;40%, +4 if &lt;60%, +3 if &lt;80%.</li>
+                </ul>
+                <div class="max">Total Score is the sum of the four. In the table it is colored <span style="color:green;font-weight:bold;">green</span> at &ge;15 and <span style="color:orange;font-weight:bold;">orange</span> at &ge;10.</div>
+            </details>
             {table}
         </div>
         
@@ -232,10 +250,10 @@ def generate_html_report(df):
                     orderCellsTop: true,
                     fixedHeader: true,
                     pageLength: 50,
-                    order: [[4, "desc"]], // Sort by Total Score descending by default (assuming index 4)
+                    order: [[{score_idx}, "desc"]], // Sort by Total Score descending by default
                     columnDefs: [
                         {{
-                            targets: [4], // Total Score
+                            targets: [{score_idx}], // Total Score
                             render: function(data, type, row) {{
                                 if (type === 'display') {{
                                     var val = parseFloat(data);
@@ -247,19 +265,19 @@ def generate_html_report(df):
                             }}
                         }},
                         {{
-                            targets: [11, 12, 13, 14, 15, 23, 24, 28, 29, 30], // Financials / Caps (adjust indices based on final columns)
+                            targets: {number_targets}, // Prices / caps / dollar magnitudes (B/T)
                             render: function(data, type, row) {{
                                 if (type === 'display') return formatNumber(parseFloat(data));
                                 return data;
                             }}
                         }},
                         {{
-                            targets: [16, 17, 18, 19, 20, 21, 22, 26, 27, 31, 32, 33, 34], // Margins/Ratios/Growth (adjust indices)
+                            targets: {percent_targets}, // Margins / growth rates (x100 + %)
                             render: function(data, type, row) {{
                                 if (type === 'display' && data !== null && data !== "") {{
                                     return (parseFloat(data) * 100).toFixed(2) + "%";
                                 }}
-                                return data; 
+                                return data;
                             }}
                         }}
                     ],
@@ -288,8 +306,34 @@ def generate_html_report(df):
     
     html_table = df.to_html(index=False, table_id="stockTable", classes='display', border=0)
     current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    
-    final_html = html_template.format(timestamp=current_time, table=html_table)
+
+    # Resolve formatter target columns by NAME so they never drift when columns
+    # are added/reordered. Dollar-magnitude/price columns -> formatNumber (B/T);
+    # margins & growth rates -> x100 + "%".
+    cols = list(df.columns)
+
+    def col_indices(names):
+        return [cols.index(n) for n in names if n in cols]
+
+    number_cols = [
+        "Price", "Volume", "Market Cap", "RSI (14)", "50d MA", "200d MA",
+        "52w High", "P/E Ratio", "EPS", "Revenue", "Asset", "Liability",
+        "L/A Ratio", "Operating CF", "CapEx", "Free CF",
+    ]
+    percent_cols = [
+        "Gross Margin", "Operating Margin", "Net Margin",
+        "Rev QoQ", "Rev YoY", "Net Inc QoQ", "Net Inc YoY",
+        "Asset QoQ", "Asset YoY",
+        "Op CF QoQ", "Op CF YoY", "Free CF QoQ", "Free CF YoY",
+    ]
+
+    final_html = html_template.format(
+        timestamp=current_time,
+        table=html_table,
+        score_idx=cols.index("Total Score"),
+        number_targets=json.dumps(col_indices(number_cols)),
+        percent_targets=json.dumps(col_indices(percent_cols)),
+    )
     
     with open("public/opportunity_report.html", "w") as f:
         f.write(final_html)
