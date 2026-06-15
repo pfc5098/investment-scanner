@@ -34,6 +34,13 @@ def generate_html_report(df):
             table {{ width: 100%; font-size: 0.85em; }}
             th, td {{ padding: 8px 10px; text-align: left; }}
             thead th {{ background-color: #f8f9fa; font-weight: 600; color: #1d1d1f; }}
+            /* Freeze the header row(s) and the first column (Symbol) while scrolling. */
+            #stockTable {{ border-collapse: separate; border-spacing: 0; }}
+            #stockTable thead th {{ position: -webkit-sticky; position: sticky; z-index: 2; background-color: #f8f9fa; }}
+            #stockTable thead tr:first-child th {{ top: 0; }}
+            #stockTable thead tr.filters th {{ top: 38px; }}
+            #stockTable th:first-child, #stockTable td:first-child {{ position: -webkit-sticky; position: sticky; left: 0; z-index: 1; background-color: #fff; box-shadow: 1px 0 0 #e5e5e7; }}
+            #stockTable thead th:first-child {{ z-index: 3; background-color: #f8f9fa; }}
             thead input {{ width: 100%; padding: 3px; box-sizing: border-box; margin-top: 5px; font-size: 0.8em; font-weight: normal; }}
             .dt-buttons {{ margin-bottom: 15px; }}
             .score-high {{ color: green; font-weight: bold; }}
@@ -159,7 +166,6 @@ def generate_html_report(df):
                         }}
                     ],
                     orderCellsTop: true,
-                    fixedHeader: true,
                     pageLength: 50,
                     order: [[{score_idx}, "desc"]], // Sort by Total Score descending by default
                     columnDefs: [
@@ -207,6 +213,14 @@ def generate_html_report(df):
                                 table.draw();
                             }});
                         }});
+
+                        // Pin the filter row directly beneath the (variable-height) header row.
+                        function syncStickyOffset() {{
+                            var h = $('#stockTable thead tr:first-child th').outerHeight();
+                            $('#stockTable thead tr.filters th').css('top', h + 'px');
+                        }}
+                        syncStickyOffset();
+                        $(window).on('resize', syncStickyOffset);
                     }},
                 }});
             }});
