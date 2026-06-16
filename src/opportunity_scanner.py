@@ -54,6 +54,17 @@ def generate_html_report(df):
             .legend li {{ margin-bottom: 6px; line-height: 1.45; }}
             .legend .name {{ font-weight: 600; }}
             .legend .max {{ color: #86868b; font-weight: normal; }}
+            /* Phone-friendly layout: reclaim horizontal space and shrink oversized chrome. */
+            @media (max-width: 640px) {{
+                body {{ padding: 8px; }}
+                .container {{ padding: 12px; max-width: 100%; }}
+                h1 {{ font-size: 1.45em; }}
+                table {{ font-size: 0.8em; }}
+                th, td {{ padding: 6px 8px; }}
+                .legend {{ font-size: 0.8em; padding: 10px 12px; }}
+                .dt-buttons, div.dataTables_filter {{ float: none; text-align: left; margin-bottom: 10px; }}
+                div.dataTables_filter input {{ width: 65%; }}
+            }}
         </style>
     </head>
     <body>

@@ -46,6 +46,16 @@ def generate_html_report(df):
             .dt-buttons {{ margin-bottom: 15px; }}
             .nav {{ margin-bottom: 15px; }}
             .nav a {{ text-decoration: none; color: #0066cc; }}
+            /* Phone-friendly layout: reclaim horizontal space and shrink oversized chrome. */
+            @media (max-width: 640px) {{
+                body {{ padding: 8px; }}
+                .container {{ padding: 12px; max-width: 100%; }}
+                h1 {{ font-size: 1.45em; }}
+                table {{ font-size: 0.8em; }}
+                th, td {{ padding: 6px 8px; }}
+                .dt-buttons, div.dataTables_filter {{ float: none; text-align: left; margin-bottom: 10px; }}
+                div.dataTables_filter input {{ width: 65%; }}
+            }}
         </style>
     </head>
     <body>
