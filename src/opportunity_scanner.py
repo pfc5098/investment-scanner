@@ -426,12 +426,14 @@ def main():
                 "Rev Score": rev_score,
                 "Prof Score": prof_score,
                 "BS Score": bs_score,
-                
-                # 3. Market
+
+                # 3. Momentum signal (surfaced next to the scores for quick scanning)
+                "RSI (14)": rsi,
+
+                # 4. Market
                 "Price": price,
                 "Volume": quote.get("Volume"),
                 "Market Cap": market_cap,
-                "RSI (14)": rsi,
                 "50d MA": ma50,
                 "200d MA": ma200,
                 "52w High": high52,
